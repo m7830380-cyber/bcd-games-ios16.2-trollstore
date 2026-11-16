@@ -164,12 +164,13 @@ struct AutoTuneEngineChecks {
         let tailSigs = [AutoTuneSignal(has: ["[present] ml1175"]), AutoTuneSignal(has: ["[present] ml1175"], sinceLaunch: true),
                         AutoTuneSignal(has: ["Device error at frame"])]
         let two = AutoTuneLogScanner(signals: tailSigs)
-        two.feed(Data(("[10:00:00.000] [INFO] [prev-tail] [09:59:00.000] [ERR] Device error at frame 12\n"
-                       + "[10:00:00.001] [INFO] [prev-tail] [09:59:01.000] [INFO] [bcd] library launch Old: avx=0\n"
-                       + "[10:00:01.000] [INFO] [bcd] library launch First Game: avx=0\n"
-                       + "warn:  [present] ml1175 commitBeforePresent=1\n"
-                       + "[10:05:00.000] [INFO] [bcd] library launch Second Game: avx=0\n"
-                       + "[10:05:30.000] [INFO] [session] length=22s play=0s frames=0 api=OpenGL/32 game=Second Game\n").utf8))
+        let sampleLog: String = "[10:00:00.000] [INFO] [prev-tail] [09:59:00.000] [ERR] Device error at frame 12\n"
+            + "[10:00:00.001] [INFO] [prev-tail] [09:59:01.000] [INFO] [bcd] library launch Old: avx=0\n"
+            + "[10:00:01.000] [INFO] [bcd] library launch First Game: avx=0\n"
+            + "warn:  [present] ml1175 commitBeforePresent=1\n"
+            + "[10:05:00.000] [INFO] [bcd] library launch Second Game: avx=0\n"
+            + "[10:05:30.000] [INFO] [session] length=22s play=0s frames=0 api=OpenGL/32 game=Second Game\n"
+        two.feed(Data(sampleLog.utf8))
         two.finish()
         expect(two.counts == [1, 0, 0], "a [prev-tail] line counts nowhere; a sinceLaunch count restarts at a launch: \(two.counts)")
         let oneRun = AutoTuneLogScanner(signals: tailSigs)

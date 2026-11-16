@@ -2695,7 +2695,7 @@ jobs:
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.2 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_MACOSX_BUNDLE=OFF \
             -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF -DBUILD_THUNKS=OFF \
@@ -2835,7 +2835,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.2 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
             -DLLVM_TABLEGEN="$GITHUB_WORKSPACE/toolchains/llvm-host-build/bin/llvm-tblgen" \
@@ -2851,7 +2851,7 @@ jobs:
             > "$GITHUB_WORKSPACE/llvm-ios-build.log" 2>&1
 
       - name: Verify LLVM iOS build
-        if: always()
+        if: success()
         shell: bash
         run: |
           set +e
