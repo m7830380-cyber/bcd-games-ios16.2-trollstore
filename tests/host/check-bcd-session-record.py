@@ -220,29 +220,33 @@ else:
             line = next((l[len("note: "):] for l in r.stdout.splitlines() if l.startswith("note: [session]")), "")
 
         # tools/log-facts.py reads the line the app writes
-        spec = importlib.util.spec_from_file_location("log_facts", R / "tools/log-facts.py")
-        facts = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(facts)
-        parsed = facts.parse_session("[21:05:03.123] [INFO] " + line) if line else None
-        check(parsed is not None and parsed.get("avg") == "58.7" and parsed.get("low1") == "41.2" and parsed.get("low01") == "22.5"
-              and parsed.get("stalls") == "2/14s" and parsed.get("api") == "D3D11/64" and parsed.get("game") == "Hollow Knight" and parsed.get("thermal") == "fair",
-              "log-facts.py reads the line the app writes, field for field", str(parsed))
-        words = facts.session_words(parsed or {})
-        check("20 min played" in words and "58.7 FPS avg" in words and "1% low 41.2" in words and "0.1% low 22.5" in words and "worst 215ms" in words
-              and "stalls 2/14s" in words and "peak 3412MB of 5800MB" in words and "thermal fair" in words and "API D3D11/64" in words and "cap 60" in words,
-              "... and says it in words", words)
-        check(facts.parse_session("[session] the last session of X did not end cleanly (in front); asking") is None
-              and facts.parse_session("[present] count=3") is None, "... and nothing else is a summary")
-        log = [
-            "[bcd] library launch Hollow Knight: x",
-            "[session] length=300s partial=1 play=250s frames=15000 avg=60.0 low1=50.0 worst=40ms stalls=0/0s peak=2000MB limit=5800MB thermal=nominal lpm=0 game=Hollow Knight",
-            "[session] length=1234s play=1180s frames=71234 avg=58.7 low1=41.2 low01=22.5 worst=215ms stalls=2/14s peak=3412MB limit=5800MB thermal=fair lpm=0 api=D3D11/64 game=Hollow Knight",
-            "[session] the last session of Old Game did not end cleanly (in front); asking whether to send its log",
-            "[screenshot] saved Hollow Knight 2026-10-25 21.05.03.jpg 1864x860 412 KB photos=asked black=0",
-        ]
-        found, unclean, shots = facts.session_facts(log)
-        check(len(found) == 2 and len(unclean) == 1 and shots == 1 and found[-1][1].get("partial") is None and found[0][1].get("partial") == "1",
-              "log-facts.py finds the partial and the whole summary, the unclean-close line and the screenshots", f"{found} {unclean} {shots}")
+        log_facts_file = R / "tools/log-facts.py"
+        if log_facts_file.exists():
+            spec = importlib.util.spec_from_file_location("log_facts", log_facts_file)
+            facts = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(facts)
+            parsed = facts.parse_session("[21:05:03.123] [INFO] " + line) if line else None
+            check(parsed is not None and parsed.get("avg") == "58.7" and parsed.get("low1") == "41.2" and parsed.get("low01") == "22.5"
+                  and parsed.get("stalls") == "2/14s" and parsed.get("api") == "D3D11/64" and parsed.get("game") == "Hollow Knight" and parsed.get("thermal") == "fair",
+                  "log-facts.py reads the line the app writes, field for field", str(parsed))
+            words = facts.session_words(parsed or {})
+            check("20 min played" in words and "58.7 FPS avg" in words and "1% low 41.2" in words and "0.1% low 22.5" in words and "worst 215ms" in words
+                  and "stalls 2/14s" in words and "peak 3412MB of 5800MB" in words and "thermal fair" in words and "API D3D11/64" in words and "cap 60" in words,
+                  "... and says it in words", words)
+            check(facts.parse_session("[session] the last session of X did not end cleanly (in front); asking") is None
+                  and facts.parse_session("[present] count=3") is None, "... and nothing else is a summary")
+            log = [
+                "[bcd] library launch Hollow Knight: x",
+                "[session] length=300s partial=1 play=250s frames=15000 avg=60.0 low1=50.0 worst=40ms stalls=0/0s peak=2000MB limit=5800MB thermal=nominal lpm=0 game=Hollow Knight",
+                "[session] length=1234s play=1180s frames=71234 avg=58.7 low1=41.2 low01=22.5 worst=215ms stalls=2/14s peak=3412MB limit=5800MB thermal=fair lpm=0 api=D3D11/64 game=Hollow Knight",
+                "[session] the last session of Old Game did not end cleanly (in front); asking whether to send its log",
+                "[screenshot] saved Hollow Knight 2026-10-25 21.05.03.jpg 1864x860 412 KB photos=asked black=0",
+            ]
+            found, unclean, shots = facts.session_facts(log)
+            check(len(found) == 2 and len(unclean) == 1 and shots == 1 and found[-1][1].get("partial") is None and found[0][1].get("partial") == "1",
+                  "log-facts.py finds the partial and the whole summary, the unclean-close line and the screenshots", f"{found} {unclean} {shots}")
+        else:
+            print("SKIP log-facts.py checks: tools/log-facts.py not present in public repo")
 
         # the scanner behind `pull-logs.py --replay`
         replay = t / "replay"

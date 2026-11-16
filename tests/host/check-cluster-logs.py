@@ -13,7 +13,11 @@ from pathlib import Path
 import importlib.util, json, os, subprocess, sys, tempfile
 
 root = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location("cluster_logs", root / "tools/cluster-logs.py")
+cluster_file = root / "tools/cluster-logs.py"
+if not cluster_file.exists():
+    print("SKIP check-cluster-logs: tools/cluster-logs.py not present in public repo")
+    sys.exit(0)
+spec = importlib.util.spec_from_file_location("cluster_logs", cluster_file)
 cl = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cl)
 ok = True

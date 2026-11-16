@@ -163,18 +163,22 @@ else:
             bad = [l for l in r.stdout.splitlines() if l.startswith("FAIL") or l.startswith("     ")]
             check(r.returncode == 0 and len(oks) >= 30, f"the trace rules: {len(oks)} checks", "\n      ".join(bad[:12]))
             # tools/log-facts.py reads the block the app appends
-            spec = importlib.util.spec_from_file_location("log_facts", R / "tools/log-facts.py")
-            facts = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(facts)
-            lines = ["[21:05:03.000] [INFO] [trace] recording one line a second to logs/traces/x.trace.csv", "last log line"]
-            lines += sent.read_text().split("\n") if sent.exists() else []
-            header, rows = facts.parse_trace(lines)
-            check(header is not None and header.get("jit_total") == "896" and header.get("rows") == "200" and header.get("start") == "21:05:03.120"
-                  and len(rows) == 200 and rows[0]["t"] == 0 and rows[-1]["t"] == 199 and rows[5]["mem"] == 1005 and rows[3]["fps"] == 58.1,
-                  "log-facts.py reads the block the app appends, field for field (the app's own timestamped [trace] line is no part of it)", str(header))
-            words = facts.trace_words(header, rows)
-            check("3 min" in words and "fps avg 58" in words and "memory peak 1199 MB" in words and "JIT pool peak 40 of 896 MB" in words, "... and says it in words", words)
-            check(facts.parse_trace(["[trace] 1,2,3", "x"])[1] == [] and facts.parse_trace([])[1] == [], "... nothing else is a trace")
+            log_facts_file = R / "tools/log-facts.py"
+            if log_facts_file.exists():
+                spec = importlib.util.spec_from_file_location("log_facts", log_facts_file)
+                facts = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(facts)
+                lines = ["[21:05:03.000] [INFO] [trace] recording one line a second to logs/traces/x.trace.csv", "last log line"]
+                lines += sent.read_text().split("\n") if sent.exists() else []
+                header, rows = facts.parse_trace(lines)
+                check(header is not None and header.get("jit_total") == "896" and header.get("rows") == "200" and header.get("start") == "21:05:03.120"
+                      and len(rows) == 200 and rows[0]["t"] == 0 and rows[-1]["t"] == 199 and rows[5]["mem"] == 1005 and rows[3]["fps"] == 58.1,
+                      "log-facts.py reads the block the app appends, field for field (the app's own timestamped [trace] line is no part of it)", str(header))
+                words = facts.trace_words(header, rows)
+                check("3 min" in words and "fps avg 58" in words and "memory peak 1199 MB" in words and "JIT pool peak 40 of 896 MB" in words, "... and says it in words", words)
+                check(facts.parse_trace(["[trace] 1,2,3", "x"])[1] == [] and facts.parse_trace([])[1] == [], "... nothing else is a trace")
+            else:
+                print("SKIP log-facts.py checks: tools/log-facts.py not present in public repo")
 
 print("PASS: performance trace" if failures == 0 else f"FAILED: performance trace ({failures})")
 sys.exit(1 if failures else 0)
