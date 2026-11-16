@@ -1,0 +1,11 @@
+name: Test Runner
+on:
+  workflow_dispatch:
+
+jobs:
+  test-macos-latest:
+    runs-on: macos-latest
+    steps:
+      - run: |
+          sw_vers
+          xcodebuild -version
