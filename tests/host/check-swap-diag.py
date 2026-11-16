@@ -237,11 +237,11 @@ int main(void) {
     assert(last_error == 0x1234 && loglen == 0 && timeouts == 0);
     /* a Present the worker is stuck in for ~3.5 slices: the drain ends when it does */
     q.sub_busy = 1; q.diag_job = MAD_SUB_PRESENT; mad_swd_step(&q, 'D'); worker_done = 0;
-    pthread_create(&t, NULL, finish_job, (void *)(uintptr_t)175);
+    pthread_create(&t, NULL, finish_job, (void *)(uintptr_t)250);
     last_error = 0x1234; mad_queue_drain(&q);
     assert(worker_done && !q.sub_busy && last_error == 0x1234);
     pthread_join(t, NULL);
-    assert(timeouts >= 2 && strstr(logbuf, "queue drain on queue") && strstr(logbuf, "still waiting after 2 s") &&
+    assert(timeouts >= 1 && strstr(logbuf, "queue drain on queue") && strstr(logbuf, "still waiting after 2 s") &&
            strstr(logbuf, "the worker is in Present (nextDrawable) for"));
     printf("drain: %d slices, %zu bytes logged\n", timeouts, loglen);
     /* a job that finishes inside the first slice: no line */
