@@ -12,11 +12,27 @@ permissions:
 jobs:
   auto-retry:
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'cancelled' }}
+    if: github.event.workflow_run.conclusion != 'success'
     steps:
-      - name: Re-trigger Build on Queue Timeout
+      - name: Check if failure was a queue timeout (no runner assigned)
+        id: check_queue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Previous build attempt was cancelled due to queue timeout. Re-dispatching build..."
+          RUN_ID="${{ github.event.workflow_run.id }}"
+          echo "Checking jobs for run $RUN_ID..."
+          RUNNER_ID=$(gh api /repos/${{ github.repository }}/actions/runs/$RUN_ID/jobs --jq '.jobs[0].runner_id // 0')
+          echo "Runner ID: $RUNNER_ID"
+          if [ "$RUNNER_ID" = "0" ] || [ "$RUNNER_ID" = "null" ] || [ -z "$RUNNER_ID" ]; then
+            echo "should_retry=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Re-trigger Build on Queue Timeout
+        if: steps.check_queue.outputs.should_retry == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Queue timeout detected (no runner was allocated). Re-dispatching build..."
           gh api -X POST /repos/${{ github.repository }}/actions/workflows/build-ipa.yml/dispatches -f ref=main
