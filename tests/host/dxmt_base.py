@@ -22,6 +22,6 @@ def rev(dxmt):
     if not wm.is_file() or PIN_MARKER not in wm.read_text(errors='ignore'):
         return 'HEAD'
     have = subprocess.run(['git', '-C', str(dxmt), 'cat-file', '-e', OVERLAY_BASE + '^{commit}'], capture_output=True)
-    if have.returncode:
-        subprocess.run(['git', '-C', str(dxmt), 'fetch', '-q', '--depth=1', 'origin', OVERLAY_BASE], check=True)
-    return OVERLAY_BASE
+    if have.returncode == 0:
+        return OVERLAY_BASE
+    return 'HEAD'
