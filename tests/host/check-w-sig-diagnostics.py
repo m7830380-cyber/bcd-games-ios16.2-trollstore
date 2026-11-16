@@ -118,7 +118,9 @@ HARNESS = r'''
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 /* stand-ins: arm64 thread state, the engine's JIT bookkeeping, a TEB whose WowTebOffset is at 0x180c */
-typedef struct { uint64_t __x[29]; uint64_t __fp, __lr, __sp, __pc; uint32_t __cpsr; } arm_thread_state64_t;
+#define arm_thread_state64_t fake_arm_thread_state64_t
+typedef struct { uint64_t __x[29]; uint64_t __fp, __lr, __sp, __pc; uint32_t __cpsr; } fake_arm_thread_state64_t;
+#undef __darwin_arm_thread_state64_get_pc
 #define __darwin_arm_thread_state64_get_pc(s) ((s).__pc)
 #define STDERR_FILENO 2
 void *ios_jit_rx_base_global; size_t ios_jit_pool_size_global;
