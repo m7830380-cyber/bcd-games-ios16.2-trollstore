@@ -1,0 +1,27 @@
+# WOW64 Binaries
+`i386-windows/attrib.exe`
+`i386-windows/cacls.exe`
+`i386-windows/cscript.exe`
+`i386-windows/expand.exe`
+`i386-windows/fc.exe`
+`i386-windows/find.exe`
+`i386-windows/findstr.exe`
+`i386-windows/hostname.exe`
+`i386-windows/icacls.exe`
+`i386-windows/ipconfig.exe`
+`i386-windows/ping.exe`
+`i386-windows/reg.exe`
+`i386-windows/robocopy.exe`
+`i386-windows/sdbinst.exe`
+`i386-windows/setx.exe`
+`i386-windows/sort.exe`
+`i386-windows/subst.exe`
+`i386-windows/systeminfo.exe`
+`i386-windows/taskkill.exe`
+`i386-windows/tasklist.exe`
+`i386-windows/timeout.exe`
+`i386-windows/where.exe`
+`i386-windows/whoami.exe`
+`i386-windows/wmic.exe`
+`i386-windows/wscript.exe`
+`i386-windows/xcopy.exe`
