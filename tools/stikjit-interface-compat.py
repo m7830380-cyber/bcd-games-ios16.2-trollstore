@@ -26,6 +26,7 @@ MODULE = "StikJIT"
 def convert(text: str) -> str:
     text = re.sub(r"\b%s::" % MODULE, "", text)
     text = re.sub(r"\b([A-Za-z_][A-Za-z0-9_]*)::(?=[A-Za-z_`])", r"\1.", text)
+    text = re.sub(r"-target arm64-apple-ios17\.[0-9]+", "-target arm64-apple-ios16.2", text)
     return text
 
 

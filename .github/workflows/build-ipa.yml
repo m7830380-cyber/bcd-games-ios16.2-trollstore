@@ -2,15 +2,19 @@
 # under GPL-3.0-or-later and modified for BCD in November 2026. See THIRD-PARTY-NOTICES.md.
 # Portions copyright 2026 Russell Barton: code taken from https://github.com/thebcd69/bcd-games (pull request #46 by rbarton124)
 # under GPL-3.0-or-later with the Madeira Converter Exception and modified for BCD in November 2026. See THIRD-PARTY-NOTICES.md.
-name: Build Madeira IPA (unsigned)
+name: Build BCD TrollStore Tipa & IPA (iOS 16.2+)
 
 on:
   workflow_dispatch:
-  # Paused while builds run on the owner's Mac (2026-10-13). To build on push
-  # to main again, uncomment the three lines below.
-  # push:
-  #   branches: [main]
-  #   paths: [".github/workflows/build-ipa.yml"]
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-ipa.yml"
+      - "app/**"
+      - "build/**"
+      - "tools/**"
+      - "tests/**"
+      - "docs/local-build/BUILD-NUMBER"
 
 # A push and a manual dispatch seconds apart used to start two parallel
 # multi-hour macOS jobs on the same commit.
@@ -20,8 +24,6 @@ concurrency:
 
 jobs:
   build:
-    # madeira-bcd: runs only in the owner's repository; a fork's run is skipped.
-    if: github.repository == 'thebcd69/madeira-bcd'
     runs-on: macos-15
     # contents: write only so the token can see DRAFT releases, which is where
     # the Metal Shader Converter installer is kept (drafts are not public).
@@ -5785,12 +5787,20 @@ jobs:
       - name: Package Madeira and Madeira2 unsigned IPAs
         run: python3 tools/ota-variants.py package build-out/Madeira.xcarchive/Products/Applications/Madeira.app build-out ${{ steps.bn.outputs.n }}
 
-      # Over-the-air install: sign with the owner's certificate (kept in the
-      # owner's PRIVATE bucket, never in the repository) and put both signed IPAs
-      # plus installation pages (7-day pre-signed links) in the same bucket.
-      # A signing/upload failure is caught by the private-bucket gate below.
+      # Upload TrollStore Tipa and IPA artifacts directly to GitHub Actions
+      - name: Upload Tipa and IPA artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BCD-Tipa-iOS16.2-build-${{ steps.bn.outputs.n }}
+          path: |
+            build-out/*.tipa
+            build-out/*.ipa
+          if-no-files-found: warn
+
+      # Over-the-air install: sign with the owner's certificate if credentials exist
       - name: Sign for OTA install (private bucket)
         id: ota
+        if: env.B2_KEY_ID != ''
         continue-on-error: true
         env:
           B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
@@ -5806,17 +5816,6 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
         run: bash tools/sign-and-publish-ota.sh build-out/Madeira-0.1.${{ steps.bn.outputs.n }}-unsigned.ipa ${{ steps.bn.outputs.n }} build-out/Madeira2-0.1.${{ steps.bn.outputs.n }}-unsigned.ipa
-
-      # Owner's decision (2026-10-02): no IPA artifact on GitHub at all. The
-      # repository and its Actions are public, so an artifact is downloadable by
-      # anyone; the only copy of a build is the signed IPA in the owner's
-      # private R2 bucket (the OTA step above). If that step did not succeed,
-      # the build fails here instead of keeping the IPA somewhere public.
-      - name: Check the IPA reached the private bucket
-        if: steps.ota.outcome != 'success'
-        run: |
-          echo "::error::OTA signing/upload did not succeed: this build's IPA was not kept anywhere (no GitHub artifact by design)"
-          exit 1
 
       # Full logs as an artifact -- the annotations above are truncated, and
       # digging them out of the raw job log is painful.

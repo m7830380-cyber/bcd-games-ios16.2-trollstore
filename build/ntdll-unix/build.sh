@@ -18,7 +18,7 @@ mkdir -p "$OBJ_DIR"
 RUSAGE_PAGE_WAIT_FLAGS=()
 if printf '#include <sys/resource.h>\nvoid probe(struct rusage_info_v6 *r) { (void)r->ri_page_wait_time_mach; }\n' | \
     xcrun -sdk iphoneos clang -arch arm64 -isysroot "$SDK" \
-        -miphoneos-version-min=17.0 -x c -fsyntax-only - >/dev/null 2>&1; then
+        -miphoneos-version-min=16.2 -x c -fsyntax-only - >/dev/null 2>&1; then
     RUSAGE_PAGE_WAIT_FLAGS=(-DMADEIRA_HAVE_RUSAGE_PAGE_WAIT_TIME_MACH=1)
 fi
 
@@ -33,7 +33,7 @@ compile_one() {
     echo -n "  $name... "
 
     if xcrun -sdk iphoneos clang \
-        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.2 \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$WINE_BUILD/include/config.h" \
@@ -75,7 +75,7 @@ compile_unixlib() {
     shift 3
     echo -n "  $name... "
     if xcrun -sdk iphoneos clang \
-        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.2 \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$WINE_BUILD/include/config.h" \
@@ -190,7 +190,7 @@ compile_unixlib "$WINE_SRC/dlls/winevulkan/vulkan_thunks.c" "winevulkan_thunks" 
 # (app/Madeira.xcodeproj, Frameworks phase) next to the FFmpeg archives.
 echo -n "  wg_parser_apple_ios... "
 if xcrun -sdk iphoneos clang \
-    -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+    -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.2 \
     -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing -Wall -Werror=implicit-function-declaration \
     -c "$BUILD_DIR/wg_parser_apple_ios.c" -o "$OBJ_DIR/wg_parser_apple_ios.o" 2>"$OBJ_DIR/wg_parser_apple_ios.err"; then
     echo "OK"
@@ -212,7 +212,7 @@ for midi_src in bcd_midi_ios.c bcd_midi_synth_ios.m; do
     case "$midi_src" in *.m) midi_flags="-fobjc-arc -fmodules" ;; esac
     echo -n "  $midi_name... "
     if xcrun -sdk iphoneos clang \
-        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
+        -arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.2 \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing -Wall -Werror=implicit-function-declaration \
         $midi_flags \
         -c "$BUILD_DIR/$midi_src" -o "$OBJ_DIR/$midi_name.o" 2>"$OBJ_DIR/$midi_name.err"; then

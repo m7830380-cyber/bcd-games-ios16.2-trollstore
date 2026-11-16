@@ -92,7 +92,7 @@ struct SigningStatus {
     /// CS_GET_TASK_ALLOW. Unknown flags count as debuggable, so a failed query
     /// never blocks a copy that works.
     var debuggable: Bool { !known || flags & 0x4 != 0 }
-    var debugged: Bool { known && flags & 0x1000_0000 != 0 }
+    var debugged: Bool { (known && flags & 0x1000_0000 != 0) || jit_is_debugged_quiet() }
 
     static var current: SigningStatus {
         var flags: UInt32 = 0

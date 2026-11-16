@@ -100,7 +100,7 @@ if [ ! -f "$SRC/.madeira-extracted" ]; then
 fi
 
 # ------------------------------------------------------------------ configure
-HOSTFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=17.0"
+HOSTFLAGS="-arch arm64 -isysroot $SDK -miphoneos-version-min=16.2"
 CONFIG_ARGS=(
     --prefix="$PREFIX"
     --enable-cross-compile

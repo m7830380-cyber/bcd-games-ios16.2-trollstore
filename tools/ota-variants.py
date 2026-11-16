@@ -69,6 +69,7 @@ def stage_variants(source, output):
 # them and names no one. The owner's OTA signing re-signs everything with the profile.
 APP = Path(__file__).resolve().parents[1] / "app"
 SIDELOAD_ENTITLEMENTS = APP / "Madeira" / "Sideload.entitlements"
+TROLLSTORE_ENTITLEMENTS = APP / "Madeira" / "TrollStore.entitlements"
 EXTENSION_ENTITLEMENTS = {"MadeiraMemoryHost.appex": APP / "MadeiraMemoryHost" / "MemoryHost.entitlements",
                           "MadeiraJITHelper.appex": APP / "MadeiraJITHelper" / "JITHelper.entitlements"}
 
@@ -92,14 +93,26 @@ def fakesign(app, entitlements=SIDELOAD_ENTITLEMENTS):
 
 def package(source, output, build):
     output = Path(output).resolve()
+    troll_ents = TROLLSTORE_ENTITLEMENTS if TROLLSTORE_ENTITLEMENTS.exists() else SIDELOAD_ENTITLEMENTS
     for name, root in stage_variants(source, output):
-        fakesign(root / "Payload" / (name + ".app"))
+        # 1. Standard unsigned IPA (sideloading entitlements)
+        fakesign(root / "Payload" / (name + ".app"), SIDELOAD_ENTITLEMENTS)
         target = output / f"{name}-0.1.{build}-unsigned.ipa"
-        # No ._ AppleDouble files for extended attributes a Mac gave the files: iOS
-        # refuses a bundle with files its signature does not cover.
         subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--noacl",
                         "--keepParent", "Payload", str(target)], cwd=root, check=True)
-        print(f"Packaged {name} 0.1.{build}")
+        print(f"Packaged {name} 0.1.{build} (IPA)")
+
+        # 2. TrollStore TIPA (TrollStore entitlements with dynamic-codesigning, no-sandbox, memory limits)
+        fakesign(root / "Payload" / (name + ".app"), troll_ents)
+        tipa_target = output / f"{name}-0.1.{build}-TrollStore.tipa"
+        subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--noacl",
+                        "--keepParent", "Payload", str(tipa_target)], cwd=root, check=True)
+        print(f"Packaged {name} 0.1.{build} (TrollStore TIPA)")
+
+        if name == "Madeira":
+            shutil.copyfile(tipa_target, output / "BCD-iOS16.2-TrollStore.tipa")
+            shutil.copyfile(tipa_target, output / "BCD.tipa")
+            shutil.copyfile(target, output / "BCD.ipa")
 
 
 def build_version(key):

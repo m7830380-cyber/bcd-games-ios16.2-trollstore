@@ -717,6 +717,19 @@ void *jit26_prepare_region(void *addr, size_t len) {
 }
 
 __attribute__((noinline, optnone))
+#ifndef PT_TRACE_ME
+#define PT_TRACE_ME 0
+#endif
+extern int ptrace(int request, pid_t pid, caddr_t addr, int data);
+
+__attribute__((constructor))
+static void trollstore_jit_init(void) {
+    // Under TrollStore (or unsandboxed environment), PT_TRACE_ME asks the kernel
+    // to trace this process, which causes XNU to set P_TRACED and CS_DEBUGGED.
+    // If not supported or already traced/debugged, it is a harmless no-op.
+    ptrace(PT_TRACE_ME, 0, 0, 0);
+}
+
 void jit26_detach(void) {
     __asm__ volatile(
         "mov x16, #0\n"
@@ -728,11 +741,14 @@ void jit26_detach(void) {
 bool jit_check_debugged(void) {
     uint32_t flags = 0;
     int result = csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags));
-    if (result != 0) {
-        jit_log("csops failed, assuming not debugged");
-        return false;
+    bool debugged = (result == 0) && ((flags & CS_DEBUGGED) != 0);
+    if (!debugged) {
+        char detail[128];
+        if (jit_nodebug_selftest(detail, sizeof(detail))) {
+            jit_log("CS_DEBUGGED not set, but direct JIT execution succeeded (TrollStore): %s", detail);
+            return true;
+        }
     }
-    bool debugged = (flags & CS_DEBUGGED) != 0;
     jit_log("CS_DEBUGGED flag: %s (flags=0x%x)", debugged ? "SET" : "NOT SET", flags);
     return debugged;
 }
@@ -741,8 +757,15 @@ bool jit_check_debugged(void) {
 // re-reads this every 2s and jit_check_debugged would flood the log).
 bool jit_is_debugged_quiet(void) {
     uint32_t flags = 0;
-    if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) != 0) return false;
-    return (flags & CS_DEBUGGED) != 0;
+    if (csops(getpid(), CS_OPS_STATUS, &flags, sizeof(flags)) == 0 && (flags & CS_DEBUGGED) != 0) {
+        return true;
+    }
+    static int nodebug_cached = -1;
+    if (nodebug_cached == -1) {
+        char detail[64];
+        nodebug_cached = jit_nodebug_selftest(detail, sizeof(detail)) ? 1 : 0;
+    }
+    return nodebug_cached == 1;
 }
 
 bool jit_test_mapping(void) {
