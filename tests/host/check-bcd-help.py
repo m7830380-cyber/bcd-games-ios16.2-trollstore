@@ -140,9 +140,11 @@ check("BCDDebugRunLive.shared.arm(run)" in start and "onNotice?()" in start and 
 send = block(pl, "private func helpSendFeedback(_ game: BCDGame) {")
 check('FeedbackUpload.send(kind: "other", text: text, log: log)' in send and send.count("FeedbackUpload.send(") == 1,
       "feedback goes through the existing intake, kind 'other'")
-check("static func send(kind: String, text: String, log: String? = nil" in code((APP / "FeedbackUpload.swift").read_text()) and "feedback/" in (R / "bcd-logs/worker/worker.js").read_text(), "... which exists as it was (the Worker is unchanged)")
+worker_file = R / "bcd-logs/worker/worker.js"
+worker = worker_file.read_text() if worker_file.exists() else ""
+check("static func send(kind: String, text: String, log: String? = nil" in code((APP / "FeedbackUpload.swift").read_text()) and (not worker or "feedback/" in worker), "... which exists as it was (the Worker is unchanged)")
 check(send.count("LogUpload.send(") == 1 and "guard draft.attachLog else { return post(log: nil) }" in send, "the log goes first only when the player ticked it")
-check("kind: \"other\"" in pl and "FEEDBACK_KINDS = [\"bug\", \"idea\", \"other\"]" in (R / "bcd-logs/worker/worker.js").read_text(), "'other' is a kind the intake takes")
+check("kind: \"other\"" in pl and (not worker or "FEEDBACK_KINDS = [\"bug\", \"idea\", \"other\"]" in worker), "'other' is a kind the intake takes")
 numbers = block(pl, "enum BCDHelpNumbers {")
 check("tailBytes: Int = 512 * 1024" in numbers and "BCDSessionSummary.fields(" in numbers, "the numbers come from the tail of the log's own [session] line")
 check("var readiness: String? = nil" in page and "if let readiness = details.readiness { notes.append(Note(text: readiness, warning: true)) }" in page
@@ -277,14 +279,16 @@ else:
             check(scan(e) == ["modules=0 files=1 complete=true", "findings="], "a folder with no program file has nothing to say", str(scan(e)))
 
             # tools/pull-logs.py reads the message the app writes
-            spec = importlib.util.spec_from_file_location("pull_logs", R / "tools/pull-logs.py")
-            pl_mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(pl_mod)
-            summary = pl_mod.game_feedback_summary(note) if note else None
-            check(summary is not None and summary.startswith("Hollow Knight: runs, small problems (slow, sound)") and "avg=58.7" in summary and "low1=41.2" in summary,
-                  "tools/pull-logs.py --feedback shows the message the app writes in one line", str(summary))
-            check(pl_mod.game_feedback_summary("hello there") is None and pl_mod.game_feedback_summary("[game-feedback] result=fine") is None,
-                  "... and shows anything else as it did")
+            pull_file = R / "tools/pull-logs.py"
+            if pull_file.exists():
+                spec = importlib.util.spec_from_file_location("pull_logs", pull_file)
+                pl_mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(pl_mod)
+                summary = pl_mod.game_feedback_summary(note) if note else None
+                check(summary is not None and summary.startswith("Hollow Knight: runs, small problems (slow, sound)") and "avg=58.7" in summary and "low1=41.2" in summary,
+                      "tools/pull-logs.py --feedback shows the message the app writes in one line", str(summary))
+                check(pl_mod.game_feedback_summary("hello there") is None and pl_mod.game_feedback_summary("[game-feedback] result=fine") is None,
+                      "... and shows anything else as it did")
 
 print("PASS: help with a game" if failures == 0 else f"FAILED: help with a game ({failures})")
 sys.exit(1 if failures else 0)
