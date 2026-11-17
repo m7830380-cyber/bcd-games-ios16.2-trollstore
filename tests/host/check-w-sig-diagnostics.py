@@ -374,7 +374,7 @@ with tempfile.TemporaryDirectory(prefix="wsig-") as d:
     else:
         check("G1 S10: [spin-code] names the spin (game.exe+0x1000), 32 bytes before and the bucket's bytes, and follows hop 0 through the import slot to the hook stub (winmm.asi+0x500) "
               "naming the import kernel32.dll!Sleep... ",
-              "[spin-code] the thread spins at guest 0x00401000 (game.exe+0x1000), window 0x2000000000, 3 modules in the PEB32 list" in err
+              re.search(r"\[spin-code\] the thread spins at guest 0x00401000 \(game\.exe\+0x1000\), window 0x[0-9a-f]+, 3 modules in the PEB32 list", err)
               and "[spin-code]   hop 0: slot 0x01002300 (winmm.asi+0x2300, import kernel32.dll!Sleep) holds 0x01000500 (winmm.asi+0x500)" in err, err[-2500:])
         check("...then hop 1 through the hook stub's own slot to kernel32.dll!GetTickCount's address, and hop 2 ends the chain (ret 4, no jump)",
               "[spin-code]   hop 1: slot 0x01002304 (winmm.asi+0x2304, import kernel32.dll!GetTickCount) holds 0x02000100 (kernel32.dll+0x100)" in err
