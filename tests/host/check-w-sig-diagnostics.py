@@ -155,8 +155,17 @@ static uint8_t *window(void)
 {
     /* a 4 GB-aligned window: the spin report derives the window base from the TEB's address */
     void *want = (void *)0x2000000000ULL;
-    uint8_t *w = mmap( want, 0x4000000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 );
-    return w == want ? w : NULL;
+    uint8_t *w = mmap( want, 0x4000000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0 );
+    if (w == want) return w;
+    /* fallback: allocate with headroom to guarantee a 4 GB-aligned 64 MB slice */
+    size_t sz = 0x104000000ULL;
+    uint8_t *big = mmap( NULL, sz, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 );
+    if (big != MAP_FAILED)
+    {
+        uintptr_t aligned = ((uintptr_t)big + 0xffffffffULL) & ~0xffffffffULL;
+        return (uint8_t *)aligned;
+    }
+    return NULL;
 }
 static void put32( uint8_t *W, uint32_t g, uint32_t v ) { memcpy( W + g, &v, 4 ); }
 static void put16( uint8_t *W, uint32_t g, uint16_t v ) { memcpy( W + g, &v, 2 ); }
@@ -201,7 +210,6 @@ static void build_process( uint8_t *W )
 int main( int argc, char **argv )
 {
     const char *mode = argc > 1 ? argv[1] : "";
-    uint8_t *W = window();
 
     if (!strcmp( mode, "peek" ))
     {
@@ -216,8 +224,49 @@ int main( int argc, char **argv )
         }
         return 0;
     }
-    if (!W) { printf( "skip: no 4 GB-aligned window here\n" ); return 0; }
-    build_process( W );
+    if (!strcmp( mode, "alias" ) || !strcmp( mode, "alias-zero" ))
+    {
+        /* three 16 KB-aligned pages (the line works on the 16 KB page of the RIP) */
+        uint8_t *g = (uint8_t *)(((uintptr_t)mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 ) + 0x3fff) & ~(uintptr_t)0x3fff);
+        uint8_t *rw = (uint8_t *)(((uintptr_t)mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 ) + 0x3fff) & ~(uintptr_t)0x3fff);
+        uint8_t *rx = (uint8_t *)(((uintptr_t)mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 ) + 0x3fff) & ~(uintptr_t)0x3fff);
+        if (!strcmp( mode, "alias" )) { memset( rw, 0x90, 0x4000 ); memset( rx, 0x90, 0x4000 ); }   /* the guest view is zero while rw / rx hold code: BCD's aliasing */
+        g_alias_rw = (uintptr_t)rw; g_alias_rx = (uintptr_t)rx;
+        ios_noexec_alias_views( (uint64_t)(uintptr_t)g + 0x1230 );
+        return 0;
+    }
+    if (!strcmp( mode, "rows" ))
+    {
+        uint8_t *m = mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 );
+        size_t i;
+        for (i = 0; i < 0x8000; i++) m[i] = (uint8_t)i;
+        munmap( m + 0x4000, 0x4000 );                                   /* the upper half is gone */
+        /* win = m: guest 0x100 .. : 64 bytes at 0x1000 (readable), 192 before + 32 after 0x3fe0 (the last 32 cross into the hole) */
+        ios_t32_code_rows( (uint64_t)(uintptr_t)m, "at EIP", 0x1000, 0, 64 );
+        ios_t32_code_rows( (uint64_t)(uintptr_t)m, "ret", 0x2000, 192, 32 );
+        ios_t32_code_rows( (uint64_t)(uintptr_t)m, "ret", 0x3ff0, 32, 32 );
+        return 0;
+    }
+    if (!strcmp( mode, "ring" ))
+    {
+        memset( ios_teb_free_ring, 0, sizeof(ios_teb_free_ring) );
+        ios_teb_free_n = 18;                                            /* 18 frees so far: the ring has wrapped */
+        { int k; for (k = 0; k < 16; k++) { struct ios_teb_free_rec *r = &ios_teb_free_ring[k];
+            r->teb = 0x70000000 + k * 0x100000; r->ks = r->teb + 0x10000; r->ks_end = r->ks + 0x4000; r->st_lo = r->teb + 0x40000; r->st_hi = r->teb + 0x80000;
+            r->tid = 0xe0 + 4 * k; r->by_tid = 0xd0; r->ms = ios_teb_free_now_ms() - 2000; } }
+        { char what[400]; uintptr_t a[6] = { 0x70100000 + 0x10000 + 0x3944, 0x70000000 + 0x40000 + 0x10, 0x70000000 + 0x100, 0x70000000 + 0x1fff, 0x12345678, 0x9 }; int k;
+          /* the ring has wrapped (18 frees, 16 slots): slot 1 holds the newest free (17 & 15), slot 0 the one before; the entry number printed is the position from the newest */
+          for (k = 0; k < 6; k++) { int r = ios_teb_free_lookup( a[k], what, sizeof(what) ); printf( "[%d] %d %s\n", k, r, r ? what : "" ); } }
+        return 0;
+    }
+
+    uint8_t *W = window();
+    if (!W && (!strcmp( mode, "spin" ) || !strcmp( mode, "spin64" ) || !strcmp( mode, "spinoff" ) || !strcmp( mode, "page" )))
+    {
+        printf( "skip: no 4 GB-aligned window here\n" );
+        return 0;
+    }
+    if (W) build_process( W );
     if (!strcmp( mode, "spin" ))
     {
         setenv( "MADEIRA_X86_FAULT_DUMP", "1", 1 );
@@ -285,41 +334,6 @@ int main( int argc, char **argv )
         if (!strcmp( mode, "x64-readable" )) { ios_x64_fault_av( &st, (uintptr_t)teb, (uint64_t)(uintptr_t)heap + 8 ); return 0; }    /* a readable page: a protection fault, not a wild pointer */
         ios_x64_fault_av( &st, (uintptr_t)teb, 0x8 );                    /* report 1 */
         ios_x64_fault_av( &st, (uintptr_t)teb, 0x8 );                    /* the redelivery of the same fault: nothing */
-        return 0;
-    }
-    if (!strcmp( mode, "alias" ) || !strcmp( mode, "alias-zero" ))
-    {
-        /* three 16 KB-aligned pages (the line works on the 16 KB page of the RIP) */
-        uint8_t *g = (uint8_t *)(((uintptr_t)mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 ) + 0x3fff) & ~(uintptr_t)0x3fff);
-        uint8_t *rw = (uint8_t *)(((uintptr_t)mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 ) + 0x3fff) & ~(uintptr_t)0x3fff);
-        uint8_t *rx = (uint8_t *)(((uintptr_t)mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 ) + 0x3fff) & ~(uintptr_t)0x3fff);
-        if (!strcmp( mode, "alias" )) { memset( rw, 0x90, 0x4000 ); memset( rx, 0x90, 0x4000 ); }   /* the guest view is zero while rw / rx hold code: BCD's aliasing */
-        g_alias_rw = (uintptr_t)rw; g_alias_rx = (uintptr_t)rx;
-        ios_noexec_alias_views( (uint64_t)(uintptr_t)g + 0x1230 );
-        return 0;
-    }
-    if (!strcmp( mode, "rows" ))
-    {
-        uint8_t *m = mmap( NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0 );
-        size_t i;
-        for (i = 0; i < 0x8000; i++) m[i] = (uint8_t)i;
-        munmap( m + 0x4000, 0x4000 );                                   /* the upper half is gone */
-        /* win = m: guest 0x100 .. : 64 bytes at 0x1000 (readable), 192 before + 32 after 0x3fe0 (the last 32 cross into the hole) */
-        ios_t32_code_rows( (uint64_t)(uintptr_t)m, "at EIP", 0x1000, 0, 64 );
-        ios_t32_code_rows( (uint64_t)(uintptr_t)m, "ret", 0x2000, 192, 32 );
-        ios_t32_code_rows( (uint64_t)(uintptr_t)m, "ret", 0x3ff0, 32, 32 );
-        return 0;
-    }
-    if (!strcmp( mode, "ring" ))
-    {
-        memset( ios_teb_free_ring, 0, sizeof(ios_teb_free_ring) );
-        ios_teb_free_n = 18;                                            /* 18 frees so far: the ring has wrapped */
-        { int k; for (k = 0; k < 16; k++) { struct ios_teb_free_rec *r = &ios_teb_free_ring[k];
-            r->teb = 0x70000000 + k * 0x100000; r->ks = r->teb + 0x10000; r->ks_end = r->ks + 0x4000; r->st_lo = r->teb + 0x40000; r->st_hi = r->teb + 0x80000;
-            r->tid = 0xe0 + 4 * k; r->by_tid = 0xd0; r->ms = ios_teb_free_now_ms() - 2000; } }
-        { char what[400]; uintptr_t a[6] = { 0x70100000 + 0x10000 + 0x3944, 0x70000000 + 0x40000 + 0x10, 0x70000000 + 0x100, 0x70000000 + 0x1fff, 0x12345678, 0x9 }; int k;
-          /* the ring has wrapped (18 frees, 16 slots): slot 1 holds the newest free (17 & 15), slot 0 the one before; the entry number printed is the position from the newest */
-          for (k = 0; k < 6; k++) { int r = ios_teb_free_lookup( a[k], what, sizeof(what) ); printf( "[%d] %d %s\n", k, r, r ? what : "" ); } }
         return 0;
     }
     return 2;
