@@ -76,7 +76,13 @@ def is_host_check(s):
 
 def strip_host_tests(s):
     """'Check and patch ...' steps: keep the patch, drop the host test lines."""
-    s['lines'] = [l for l in s['lines'] if not HOST_TEST.match(l.strip())]
+    out, cont = [], False
+    for l in s['lines']:
+        if cont or HOST_TEST.match(l.strip()):
+            cont = l.rstrip().endswith('\\')   # drop the command's continuation lines too
+            continue
+        out.append(l)
+    s['lines'] = out
 
 DROP_NAMES = (
     'Check the 32-bit MFC download and its session links',   # a host test around a download
