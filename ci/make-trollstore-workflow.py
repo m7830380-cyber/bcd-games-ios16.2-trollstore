@@ -124,7 +124,10 @@ PREPARE = block('''\
         run: bash ci/fetch-msc-dylib.sh
 
       - name: "iOS 16: apply ci/patches to the submodules"
-        run: bash ci/apply-patches.sh''')
+        run: bash ci/apply-patches.sh
+
+      - name: "iOS 16: drop the missing third-party docs from their SHA256SUMS"
+        run: bash ci/fix-third-party-sums.sh''')
 
 PACKAGE = block('''\
       # iOS 16 / TrollStore port: sign with ldid and TrollStore's entitlements
