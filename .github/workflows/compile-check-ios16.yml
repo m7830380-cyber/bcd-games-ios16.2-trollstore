@@ -1,0 +1,53 @@
+# iOS 16 / TrollStore port: Swift, Objective-C and C compile errors against an
+# iOS 16.0 deployment target in minutes, without the hours the native libraries
+# take. The link step fails here by design (no native libraries).
+name: Compile check (iOS 16, no link)
+
+on:
+  push:
+    branches: [ios16-trollstore]
+    paths: ['app/**', '.github/workflows/compile-check-ios16.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: compile-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)"
+          xcodebuild -version
+      - name: Compile
+        run: |
+          mkdir -p app/Madeira/x86_64-vcruntime
+          python3 tools/stikjit-interface-compat.py app/Frameworks/StikJIT.xcframework || true
+          set +e
+          xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -configuration Debug \
+            -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
+            -skipPackagePluginValidation build > xcodebuild.log 2>&1
+          echo "xcodebuild exit $?"
+          echo "== errors =="
+          grep -E "^[^ ].*: (error|fatal error):" xcodebuild.log | sort -u > errors.txt
+          wc -l < errors.txt
+          head -400 errors.txt
+          echo "== availability warnings =="
+          grep -E "only available in iOS|is unavailable in iOS" xcodebuild.log | sort -u | head -100
+          echo "== link/other =="; grep -E "^ld: |Undefined symbols|\*\* BUILD" xcodebuild.log | head -20
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compile-check-log
+          path: |
+            xcodebuild.log
+            errors.txt
+          retention-days: 5

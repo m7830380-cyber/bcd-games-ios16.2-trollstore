@@ -1370,8 +1370,8 @@ jobs:
           mkdir -p build-macos
           cd build-macos
           ../configure --enable-win64 --disable-tests \
-            CC="xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0" \
-            CROSSCC="xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=17.0" \
+            CC="xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0" \
+            CROSSCC="xcrun -sdk iphoneos clang -arch arm64 -miphoneos-version-min=16.0" \
             --host=aarch64-apple-darwin --build=x86_64-apple-darwin \
             --with-wine-tools="$GITHUB_WORKSPACE/wine/build-native" \
             --without-freetype --without-fontconfig \
@@ -2392,7 +2392,7 @@ jobs:
           BD="$GITHUB_WORKSPACE/build/wineserver"
           OBJ="$BD/obj"
           mkdir -p "$OBJ/base"
-          FLAGS=(-arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2
+          FLAGS=(-arch arm64 -isysroot "$SDK" -miphoneos-version-min=16.0 -O2
             -I"$GITHUB_WORKSPACE/wine/include" -I"$GITHUB_WORKSPACE/wine/include/wine"
             -I"$GITHUB_WORKSPACE/wine/build-macos/include"
             -I"$BD" -I"$GITHUB_WORKSPACE/wine/server"
@@ -2693,7 +2693,7 @@ jobs:
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_MACOSX_BUNDLE=OFF \
             -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF -DBUILD_THUNKS=OFF \
@@ -2833,7 +2833,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
             -DLLVM_TABLEGEN="$GITHUB_WORKSPACE/toolchains/llvm-host-build/bin/llvm-tblgen" \
