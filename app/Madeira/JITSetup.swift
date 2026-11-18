@@ -223,6 +223,10 @@ final class JITCoordinator: ObservableObject {
     }
 
     var automaticDescription: String {
+        if TrollStoreJIT.preferred {
+            return "On iOS \(UIDevice.current.systemVersion) BCD asks TrollStore to enable JIT. "
+                + "You can also open BCD from TrollStore with \"Open with JIT\"."
+        }
         if StikJITHelper.isAvailable {
             return automaticTakesBuiltIn
                 ? "BCD found StikDebug, but this device is paired with BCD, so it will enable JIT with the helper it ships with."
@@ -250,6 +254,22 @@ final class JITCoordinator: ObservableObject {
         error = nil
         status = nil
         connectionProblem = nil
+        // iOS 16 / TrollStore: no debugger, VPN or pairing file is involved (TrollStoreJIT.swift).
+        if TrollStoreJIT.preferred {
+            busy = true
+            status = "Asking TrollStore to enable JIT…"
+            TrollStoreJIT.enable { [weak self] result in
+                Task { @MainActor in
+                    self?.busy = false
+                    switch result {
+                    case .success: self?.status = "JIT is enabled."
+                    case .failure(let failure): self?.status = nil; self?.error = failure.localizedDescription
+                    }
+                    completion(result)
+                }
+            }
+            return
+        }
         ensureLoopback(then: { [weak self] restoreOnFailure in
             self?.enableResolved { result in
                 // Nothing will hold the network open now: put back what the shortcut changed.
