@@ -70,8 +70,9 @@ as BCD has it, minus BCD's host checks (`tests/host`), KosmicKrisp and BCD's
 private signing, plus this port's steps. After taking a new BCD release, run
 `python3 ci/make-trollstore-workflow.py` again.
 
-It runs by hand, or for a `v*-trollstore*` tag, which also publishes the
-`.tipa` as a release. `.github/workflows/compile-check-ios16.yml` compiles the
+It runs when the `build-trollstore` branch is pushed
+(`git push origin HEAD:build-trollstore`), or for a `v*-trollstore*` tag, which
+also publishes the `.tipa` as a release. `.github/workflows/compile-check-ios16.yml` compiles the
 app's sources against iOS 16.0 on every push (minutes, no native libraries).
 
 The pieces the port adds:
