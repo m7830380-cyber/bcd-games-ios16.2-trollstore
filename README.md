@@ -48,6 +48,12 @@
 
 *Marvel's Spider-Man Remastered, recorded on an iPhone 17 Pro Max.*
 
+> [!IMPORTANT]
+> **This is the iOS 16 / TrollStore port** (branch `ios16-trollstore`). It builds BCD for
+> iOS 16.0+ (16.2 targeted), installed with TrollStore and started with **Open with JIT**:
+> no StikDebug, VPN or weekly re-signing. Builds come from GitHub Actions. See
+> **[docs/TROLLSTORE.md](docs/TROLLSTORE.md)**. Upstream: [thebcd69/bcd-games](https://github.com/thebcd69/bcd-games).
+
 BCD runs Windows PC games on iOS and iPadOS. Wine provides Windows, FEX runs x86 and
 x64 code on Apple's chips, and DXMT plus BCD's Direct3D 12 runtime draw with Metal. BCD
 signs in to Steam, downloads the games you own, and starts them directly or through
