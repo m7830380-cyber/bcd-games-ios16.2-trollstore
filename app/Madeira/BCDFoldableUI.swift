@@ -36,6 +36,7 @@ enum BCDFoldableSceneClass {
     }
 
     @MainActor private static func apply(_ want: Bool, to window: UIWindow) -> Bool {
+        guard #available(iOS 17.0, *) else { return false }   // iOS 16 port: no trait overrides (foldables run iOS 26)
         guard want != window.traitOverrides.contains(UITraitHorizontalSizeClass.self) else { return false }
         if want { window.traitOverrides.horizontalSizeClass = .compact } else { window.traitOverrides.remove(UITraitHorizontalSizeClass.self) }
         return true

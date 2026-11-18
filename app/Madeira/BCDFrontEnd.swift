@@ -16,7 +16,7 @@ struct BCDFrontEnd: View {
     var tab: BCDTab = .home
     var focus: BCDFocus? = nil
     var body: some View {
-        if BCDDuoFeatures.active { BCDDuoFrontEnd(store: store, tab: tab, focus: focus) }
+        if #available(iOS 18.0, *), BCDDuoFeatures.active { BCDDuoFrontEnd(store: store, tab: tab, focus: focus) }
         else { BCDOriginalFrontEnd(store: store, tab: tab, focus: focus) }
     }
 }
@@ -298,6 +298,7 @@ private enum BCDDuoTab: String, CaseIterable, Identifiable {
     var title: String { self == .settings ? "Settings" : BCDTab(rawValue: rawValue)!.title }
     var symbol: String { self == .settings ? "gearshape.fill" : BCDTab(rawValue: rawValue)!.symbol }
 }
+@available(iOS 18.0, *)   // iOS 16 port: the native Duo interface (iOS 26 foldable) uses iOS 18 tabs
 private struct BCDDuoFrontEnd: View {
     @ObservedObject var store: BCDStore
     @StateObject private var focus: BCDFocus

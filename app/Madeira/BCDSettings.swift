@@ -937,14 +937,7 @@ struct BCDSettingsGroup<Content: View>: View {
         VStack(alignment: .leading, spacing: 8) {
             if let title { BCDEyebrow(text: title).padding(.leading, 4) }
             // A hairline between rows, never above the first (it would cross the card's corners).
-            Group(subviews: content) { rows in
-                VStack(spacing: 0) {
-                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { BCDSettingsSeparator() }
-                        row
-                    }
-                }
-            }
+            BCDSettingsRows(content: content)   // iOS 16 port: Group(subviews:) needs iOS 18 (iOS16SwiftUICompat.swift)
                 .background(BCDStyle.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(BCDStyle.stroke, lineWidth: 1))
             if let footer {
@@ -1264,6 +1257,7 @@ struct BCDSettingsReaderView: View {
 }
 
 // Modified 2026-11-04: native split navigation is exclusive to the Duo enhancements path.
+@available(iOS 18.0, *)   // iOS 16 port: only the Duo interface shows it
 struct BCDDuoSettingsRoot: View {
     @ObservedObject var store: BCDStore
     let close: () -> Void
@@ -1314,7 +1308,7 @@ struct BCDDuoSettingsRoot: View {
         .onDisappear { if active { BCDDuoPageOwner.release(owner) } }
         .onChange(of: active) { _, value in if value { start() } else { BCDDuoPageOwner.release(owner) } }
         .onChange(of: requestID) { _, _ in if let section { model.go(to: section) } }
-        .onScrollPhaseChange { _, phase in if phase == .interacting { focus.touched() } }
+        .bcdOnScrollInteracting { focus.touched() }
             .onChange(of: focus.focused) { _, id in
             guard active else { return }
             model.focusMoved(to: id); model.installButtons()
@@ -1374,7 +1368,7 @@ struct BCDDuoSettingsRoot: View {
             .background { BCDBackdrop() }
             .navigationTitle("Settings")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
-            .onScrollPhaseChange { _, phase in if phase == .interacting { focus.touched() } }
+            .bcdOnScrollInteracting { focus.touched() }
             .onChange(of: focus.focused) { _, id in
                 guard focus.controllerActive, let id, BCDSettingsID.listSection(id) != nil else { return }
                 revealSidebar(id, proxy)

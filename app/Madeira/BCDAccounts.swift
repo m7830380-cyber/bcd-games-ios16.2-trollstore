@@ -306,7 +306,7 @@ struct BCDAccountsSection<Backend: BCDAccountsBackend>: View {
                                 id: Self.prefix + "steam.lan") { backend.setLAN($0) }
         if steam.lanOn {
             BCDSectionKit.FieldBox(id: Self.prefix + "steam.lanhost", activate: { lanFieldFocused = true }) {
-                TextField("", text: $lanHost, prompt: Text("PC address (optional)").foregroundStyle(BCDStyle.textSoft))
+                TextField("", text: $lanHost, prompt: Text("PC address (optional)").foregroundColor(BCDStyle.textSoft))
                     .keyboardType(.decimalPad)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -672,7 +672,7 @@ struct BCDSteamSignInPage<Backend: BCDAccountsBackend>: View {
     private func passwordCard(busy: Bool) -> some View {
         BCDSectionKit.Card(eyebrow: "Your Steam account", symbol: "person.fill") {
             BCDSectionKit.FieldBox(id: Self.prefix + "account", activate: { field = .account }) {
-                TextField("", text: $account, prompt: Text("Account name").foregroundStyle(BCDStyle.textSoft))
+                TextField("", text: $account, prompt: Text("Account name").foregroundColor(BCDStyle.textSoft))
                     .textContentType(.username)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -681,7 +681,7 @@ struct BCDSteamSignInPage<Backend: BCDAccountsBackend>: View {
                     .onSubmit { field = .password }
             }
             BCDSectionKit.FieldBox(id: Self.prefix + "password", activate: { field = .password }) {
-                SecureField("", text: $password, prompt: Text("Password").foregroundStyle(BCDStyle.textSoft))
+                SecureField("", text: $password, prompt: Text("Password").foregroundColor(BCDStyle.textSoft))
                     .textContentType(.password)
                     .focused($field, equals: .password)
                     .submitLabel(.go)
@@ -716,7 +716,7 @@ struct BCDSteamSignInPage<Backend: BCDAccountsBackend>: View {
             if let kind = steamGuard.code {
                 Text(guardText(kind)).bcdFont(.body, 16).fixedSize(horizontal: false, vertical: true)
                 BCDSectionKit.FieldBox(id: Self.prefix + "code", activate: { field = .code }) {
-                    TextField("", text: $code, prompt: Text("Code").foregroundStyle(BCDStyle.textSoft))
+                    TextField("", text: $code, prompt: Text("Code").foregroundColor(BCDStyle.textSoft))
                         .textContentType(.oneTimeCode)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()

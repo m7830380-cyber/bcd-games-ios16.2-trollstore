@@ -7,7 +7,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct BCDAppearanceSettings: View {
-    private let themes = BCDThemeStore.shared
+    @ObservedObject private var themes = BCDThemeStore.shared
     @EnvironmentObject private var model: BCDSettingsModel
     @State private var choosingColor = false
     @State private var naming = false
@@ -76,7 +76,7 @@ struct BCDAppearanceSettings: View {
             }
             .padding(24).foregroundStyle(BCDStyle.text).tint(BCDStyle.lavender)
             .presentationDetents([.medium]).presentationDragIndicator(.visible)
-            .presentationBackground(BCDStyle.surface).preferredColorScheme(.dark)
+            .bcdPresentationBackground(BCDStyle.surface).preferredColorScheme(.dark)
         }
         .onChange(of: choosingColor) { _, shown in if shown { model.cover { choosingColor = false } } }
         .alert("Save color profile", isPresented: $naming) {

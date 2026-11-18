@@ -112,7 +112,7 @@ enum DeviceCapability {
             : notice(f) != nil ? "no-mesh" : "ok"
         LogStore.shared.log("[device] gpu=\"\(gpu?.name ?? "none")\" family=\(family)"
             + " argument-buffers=tier\(f.tier2 ? 2 : 1) mesh=\(f.apple7 ? 1 : 0)"
-            + " bc=\(gpu?.supportsBCTextureCompression == true ? 1 : 0)"
+            + " bc=\(gpu.map { g in if #available(iOS 16.4, *) { return g.supportsBCTextureCompression } else { return false } } == true ? 1 : 0)"
             + " atomics64=\(gpu?.supportsFamily(.apple9) == true ? 1 : 0)"
             + " cpu-lse=\(bit(f.lse)) cpu-lrcpc=\(bit(f.lrcpc)) direct3d=\(verdict) x64=\(f.x64 ? "ok" : "refused")"
             + ((!f.tier2 || !f.x64) && !gateOn ? " gate=off" : ""))

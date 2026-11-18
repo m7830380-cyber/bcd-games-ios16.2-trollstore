@@ -3,20 +3,22 @@
 // BCD Material: additional terms under GPL-3.0 section 7 apply; see LICENSE-BCD.md.
 // Modified by BCD (thebcd69), 2026-11-11: BCDThemeTint (the app's tint only while a profile other than BCD Violet is selected).
 
+import Combine
 import Foundation
-import Observation
 
 /// Observation follows reads through BCDStyle's computed properties, including independently
 /// hosted in-game panels. A palette switch never replaces a screen or resets navigation state.
-@Observable final class BCDThemeStore {
+/// iOS 16 port: Observation needs iOS 17, so this is an ObservableObject. Views that observe the store
+/// (Settings › Appearance) update at once; other screens take the new palette when they next redraw.
+final class BCDThemeStore: ObservableObject {
     static let shared = BCDThemeStore()
-    private(set) var presets: [BCDThemeProfile]
-    private(set) var saved: [BCDThemeProfile] = []
-    private(set) var current = BCDThemeProfile.original
-    private(set) var draft: BCDThemeProfile?
-    var storageError: String?
-    @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private var pendingSave: DispatchWorkItem?
+    @Published private(set) var presets: [BCDThemeProfile]
+    @Published private(set) var saved: [BCDThemeProfile] = []
+    @Published private(set) var current = BCDThemeProfile.original
+    @Published private(set) var draft: BCDThemeProfile?
+    @Published var storageError: String?
+    private let defaults: UserDefaults
+    private var pendingSave: DispatchWorkItem?
     private static let storageKey = "bcd.appearance.v1"
     private struct State: Codable { var version = 1; var selected: String; var saved: [BCDThemeProfile]; var draft: BCDThemeProfile? }
 
@@ -119,8 +121,8 @@ extension BCDThemeRGB {
 /// no override, so system alerts, pickers and controls keep the tint they have always had (modified by BCD, 2026-11-11: the pull request
 /// tinted the whole app with BCD Violet's lavender, which changed the default look).
 struct BCDThemeTint: ViewModifier {
+    @ObservedObject private var store = BCDThemeStore.shared   // iOS 16 port: no Observation tracking
     func body(content: Content) -> some View {
-        let store = BCDThemeStore.shared
         content.tint(store.current.id == BCDThemeProfile.original.id ? nil : store.color("accentSoft"))
     }
 }

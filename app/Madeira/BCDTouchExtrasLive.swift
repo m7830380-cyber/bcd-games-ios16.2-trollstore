@@ -282,10 +282,12 @@ final class BCDAimStick: @unchecked Sendable {
         post(pointer.hovered(x: x, y: y))
     }
 
+    @available(iOS 17.5, *)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveTap tap: UIPencilInteraction.Tap) {
         tapped(at: tap.hoverPose?.location)
     }
 
+    @available(iOS 17.5, *)
     func pencilInteraction(_ interaction: UIPencilInteraction, didReceiveSqueeze squeeze: UIPencilInteraction.Squeeze) {
         guard squeeze.phase == .ended else { return }
         tapped(at: squeeze.hoverPose?.location)

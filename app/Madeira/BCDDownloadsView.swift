@@ -32,7 +32,7 @@ struct BCDDownloadsView: View {
                 .padding(.horizontal, layout.gutter).padding(.vertical, 8)
             }
         }
-        .onScrollPhaseChange { _, phase in if nativeControllerNavigation && phase == .interacting { focus.touched() } }
+        .bcdOnScrollInteracting { if nativeControllerNavigation { focus.touched() } }
         .onChange(of: focus.focused) { _, _ in reveal(reader) }
         .onChange(of: focus.controllerActive) { _, _ in reveal(reader) }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in reveal(reader) }

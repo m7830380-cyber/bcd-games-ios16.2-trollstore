@@ -29,7 +29,7 @@ struct BCDHomeView: View {
     let openLibrary: () -> Void
     let openDownloads: () -> Void
     @State private var opened: BCDGame?
-    @State private var recentPosition = ScrollPosition(x: 0)
+    @State private var recentPosition = BCDScrollX(x: 0)
     @State private var positionedRecentInitially = false
     @State private var navigationOwner = UUID()
     @State private var rememberedRecent: String?
@@ -72,7 +72,7 @@ struct BCDHomeView: View {
             // The ring of the first card is drawn above the card's top edge: the fade of the top 14 pt would
             // hide it (nothing scrolls under it while the hint bar is up, the page fits).
             .modifier(BCDSoftTopEdge(height: short ? 0 : 14))
-            .onScrollPhaseChange { _, phase in if desktopAsUtility && phase == .interacting { focus.touched() } }
+            .bcdOnScrollInteracting { if desktopAsUtility { focus.touched() } }
             .onChange(of: focus.focused) { _, _ in revealHome(verticalScroll) }
             .onChange(of: focus.controllerActive) { _, _ in homeScrollSection = nil; revealHome(verticalScroll) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in homeScrollSection = nil; revealHome(verticalScroll) }
@@ -419,8 +419,8 @@ struct BCDHomeView: View {
             .modifier(BCDHomeRecentPosition(enabled: desktopAsUtility, height: tile + 12, position: $recentPosition))
             .onAppear { positionRecentInitially(tile: tile) }
             .onChange(of: homeRecent.prefix(10).map(\.id)) { _, _ in positionRecentInitially(tile: tile); revealRecent(tile: tile) }
-            .scrollClipDisabled()
-            .onScrollPhaseChange { _, phase in if desktopAsUtility && phase == .interacting { focus.touched() } }
+            .bcdScrollClipDisabled()
+            .bcdOnScrollInteracting { if desktopAsUtility { focus.touched() } }
             .onChange(of: focus.focused) { _, _ in revealRecent(tile: tile) }
             .onChange(of: focus.controllerActive) { _, _ in revealRecent(tile: tile) }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(BCDFocus.space)) } action: { frame in recentViewport = frame; revealRecent(tile: tile) }
@@ -461,10 +461,11 @@ struct BCDHomeView: View {
 private struct BCDHomeRecentPosition: ViewModifier {
     var enabled: Bool
     var height: CGFloat
-    @Binding var position: ScrollPosition
+    @Binding var position: BCDScrollX
     @ViewBuilder func body(content: Content) -> some View {
-        if enabled { content.frame(height: height).defaultScrollAnchor(.leading).scrollPosition($position) }
-        else { content }
+        if #available(iOS 18.0, *), enabled {
+            content.frame(height: height).defaultScrollAnchor(.leading).scrollPosition(position.binding($position))
+        } else { content }
     }
 }
 

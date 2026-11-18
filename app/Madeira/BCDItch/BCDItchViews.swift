@@ -127,7 +127,7 @@ struct BCDItchKeyForm: View {
                 UIApplication.shared.open(ItchAPI.keysPage)
             }
             BCDSectionKit.FieldBox(id: prefix + "key", activate: { typing = true }) {
-                SecureField("", text: $key, prompt: Text("Paste the API key").foregroundStyle(BCDStyle.textSoft))
+                SecureField("", text: $key, prompt: Text("Paste the API key").foregroundColor(BCDStyle.textSoft))
                     .textContentType(.password)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -216,7 +216,7 @@ struct BCDItchFindSheet: View {
             BCDSectionKit.Columns {
                 BCDSectionKit.Card(eyebrow: "Search", symbol: "magnifyingglass") {
                     BCDSectionKit.FieldBox(id: Self.prefix + "text", activate: { typing = true }) {
-                        TextField("", text: $text, prompt: Text("Game name, or its itch.io link").foregroundStyle(BCDStyle.textSoft))
+                        TextField("", text: $text, prompt: Text("Game name, or its itch.io link").foregroundColor(BCDStyle.textSoft))
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .focused($typing)

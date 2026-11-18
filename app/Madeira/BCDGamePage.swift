@@ -1896,7 +1896,7 @@ struct BCDGamePage: View {
                 .padding(.bottom, m.bottomRoom)
                 .frame(minHeight: m.size.height, alignment: .bottom)
             }
-            .scrollBounceBehavior(.basedOnSize)
+            .bcdScrollBounceBasedOnSize()
             .onChange(of: focus.focused) { _, id in
                 guard embeddedInNavigation, focus.controllerActive, let id, id.hasPrefix(Self.layer),
                       !id.hasPrefix(Self.panelLayer), !id.hasPrefix(Self.askLayer), !id.hasPrefix(Self.dlcLayer) else { return }

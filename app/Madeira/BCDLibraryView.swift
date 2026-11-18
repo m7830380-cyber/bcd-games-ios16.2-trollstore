@@ -470,7 +470,7 @@ struct BCDDuoLibraryView: View {
             }
             .modifier(BCDSoftTopEdge())
             .refreshable { store.actions?.refreshLibrary() }
-            .onScrollPhaseChange { _, phase in if phase == .interacting { focus.touched() } }
+            .bcdOnScrollInteracting { focus.touched() }
             .onChange(of: focus.focused) { _, _ in revealGame(reader) }
             .onChange(of: focus.controllerActive) { _, _ in revealGame(reader) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in revealGame(reader) }
@@ -478,7 +478,7 @@ struct BCDDuoLibraryView: View {
         }
         .padding(.top, 4)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { gridWidth = $0 }
-        .searchable(text: $query, isPresented: $searching, prompt: "Find a game")
+        .bcdSearchable(text: $query, isPresented: $searching, prompt: "Find a game")
         .onChange(of: searching) { _, shown in if !shown { query = "" } }
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -570,7 +570,7 @@ struct BCDDuoLibraryView: View {
             // The launchers' chips sit at the end of a row that scrolls: a chosen one is brought into view (the other chips stay where they were).
             .onAppear { if filter.isLauncher { proxy.scrollTo(filter.rawValue, anchor: .center) } }
             .onChange(of: filterKey) { _, _ in if filter.isLauncher { proxy.scrollTo(filter.rawValue, anchor: .center) } }
-            .onScrollPhaseChange { _, phase in if phase == .interacting { focus.touched() } }
+            .bcdOnScrollInteracting { focus.touched() }
             .onChange(of: focus.focused) { _, _ in revealFilter(proxy) }
             .onChange(of: focus.controllerActive) { _, _ in revealFilter(proxy) }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in revealFilter(proxy) }
