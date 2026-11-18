@@ -23,7 +23,12 @@ INCLUDES_DIRECTX="-I$DXMT_ROOT/include/native/directx -I$DXMT_ROOT/include/nativ
 INCLUDES_SHADERS="-I$BUILD_DIR/shader-headers"
 LLVM_INCLUDES="-I$LLVM_BUILD/include -I$LLVM_SRC/include"
 AIRCONV_DEFS="-D_FILE_OFFSET_BITS=64 -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS"
-CXX_FLAGS="-std=c++20 -fno-exceptions -fno-rtti"
+# iOS 16 / TrollStore port: libc++ marks floating-point to_chars (std::format) as
+# iOS 16.3. Lift that one gate (ios16_libcxx_compat.h); the app target defines the
+# functions (app/Madeira/iOS16LibcxxCompat.cpp). Every other availability check
+# stays on, so libc++ uses its header fallbacks instead of newer dylib symbols.
+LIBCXX_COMPAT="-include $BUILD_DIR/ios16_libcxx_compat.h"
+CXX_FLAGS="-std=c++20 -fno-exceptions -fno-rtti $LIBCXX_COMPAT"
 
 # MADEIRA (WOW64_DESIGN.md section 8, `dxmt_madeira_native`): the D3D9
 # frontend and its DXMT substrate, compiled as NATIVE iOS-arm64 code into this
@@ -44,7 +49,7 @@ MADEIRA_INCLUDES="-I$DXMT_SRC/nativemetal -I$DXMT_ROOT/include -I$DXMT_ROOT/libs
  -I$DXMT_SRC/d3d9 -I$DXMT_SRC/d3d9/unix -I$DXMT_SRC/d3d9shim"
 # The frontend throws (MTLD3DError) and the imported code uses dynamic_cast,
 # so it needs the two flags the rest of this archive is built without.
-MADEIRA_CXX_FLAGS="-std=c++20 -fexceptions -frtti"
+MADEIRA_CXX_FLAGS="-std=c++20 -fexceptions -frtti $LIBCXX_COMPAT"
 # The same suppressions dxmt/meson.build:48-62 applies to every DXMT
 # target; -Wno-extern-c-compat is the one that matters here (the imported
 # d3d11.h declares `struct CD3D11_DEFAULT {}`, which is size 0 in C and 1 in
@@ -130,7 +135,7 @@ compile_objcxx_arc() {
     # MADEIRA_ONLY=<name>: recompile one object only.
     if [ -n "${MADEIRA_ONLY:-}" ] && [ "$name" != "$MADEIRA_ONLY" ]; then return 0; fi
     printf "  %-40s " "$name"
-    if xcrun -sdk iphoneos clang++ $COMMON_FLAGS -std=c++20 -fobjc-arc -x objective-c++ $extra \
+    if xcrun -sdk iphoneos clang++ $COMMON_FLAGS -std=c++20 $LIBCXX_COMPAT -fobjc-arc -x objective-c++ $extra \
         -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
     else
@@ -214,7 +219,7 @@ for cpp in BlobContainer.cpp DXBCUtils.cpp ShaderBinary.cpp; do
     name=dxbc_$(basename "$cpp" .cpp)
     # ShaderBinary uses `throw`, so we can't use -fno-exceptions from CXX_FLAGS.
     printf "  %-40s " "$name"
-    if xcrun -sdk iphoneos clang++ $COMMON_FLAGS -std=c++20 -fno-rtti \
+    if xcrun -sdk iphoneos clang++ $COMMON_FLAGS -std=c++20 -fno-rtti $LIBCXX_COMPAT \
             $INCLUDES $INCLUDES_DIRECTX $AIRCONV_DEFS \
             -c "$DXMT_ROOT/libs/DXBCParser/$cpp" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
         echo "OK"; SUCCEEDED=$((SUCCEEDED+1))
@@ -253,9 +258,9 @@ if [ ! -f "$BUILD_DIR/shader-headers/dxmt_command.h" ] \
    || [ "$0" -nt "$BUILD_DIR/shader-headers/dxmt_command.h" ]; then
     mkdir -p "$BUILD_DIR/shader-headers"
     (cd "$BUILD_DIR/shader-headers" \
-     && xcrun -sdk macosx metal -std="$DXMT_METAL_STD" --target=air64-apple-macos14.0 \
+     && xcrun -sdk "${DXMT_METAL_SDK:-macosx}" metal -std="$DXMT_METAL_STD" --target="${DXMT_METAL_TARGET:-air64-apple-macos14.0}" \
           -o dxmt_command.air -c "$DXMT_SRC/dxmt/dxmt_command.metal" \
-     && xcrun -sdk macosx metallib -o dxmt_command.metallib dxmt_command.air \
+     && xcrun -sdk "${DXMT_METAL_SDK:-macosx}" metallib -o dxmt_command.metallib dxmt_command.air \
      && xxd -n dxmt_command -i dxmt_command.metallib dxmt_command.h)
     echo "  dxmt_command.h                           OK (-std=$DXMT_METAL_STD)"
 else
@@ -326,6 +331,17 @@ if [ -n "$FAILED_FILES" ]; then
 fi
 
 echo ""
+# iOS 16 / TrollStore port: libc++ symbols iOS 16.2's libc++.dylib does not
+# export. Any left undefined here would stop the app from launching on 16.2.
+POST_162_RE='__libcpp_verbose_abort|3pmr[0-9]|__hash_memory|__libcpp_tzdb|time_zone'
+LEFT=$(for o in "$OBJ_DIR"/*.o; do xcrun -sdk iphoneos nm -u "$o" 2>/dev/null | grep -E "$POST_162_RE" | grep -v '__libcpp_verbose_abort' | sed "s|^|$(basename "$o"): |"; done)
+if [ -n "$LEFT" ]; then
+    # A warning: ci/package-tipa.sh checks the linked binary, where iOS16LibcxxCompat.cpp's definitions count.
+    echo "::warning::DXMT objects reference libc++ symbols newer than iOS 16.2 (the app must define them):"; echo "$LEFT" | c++filt
+else
+    echo "  no post-16.2 libc++ references"
+fi
+
 echo "=== Archiving libdxmt_unix.a ==="
 xcrun -sdk iphoneos ar rcs "$OUT_LIB" "$OBJ_DIR"/*.o
 echo "Built: $OUT_LIB ($(wc -c < "$OUT_LIB" | tr -d ' ') bytes)"

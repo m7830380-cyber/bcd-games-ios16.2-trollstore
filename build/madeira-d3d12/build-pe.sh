@@ -83,7 +83,7 @@ if command -v xcrun > /dev/null 2>&1 &&
     # madeira-bcd (2026-10-18): the same kernels for iOS 18 (AIR 2.7; the library
     # above takes the SDK's iOS 26.2 target, AIR 2.8, which iOS 18 refuses). The
     # runtime loads this copy only when the first is refused (madeira_d3d12.c).
-    if xcrun -sdk iphoneos metal -std=metal3.0 --target=air64-apple-ios18.0 $MAD_KERNELS_FLAGS \
+    if xcrun -sdk iphoneos metal -std=metal3.0 --target=air64-apple-ios16.0 $MAD_KERNELS_FLAGS \
            -o "$OUT/mad_kernels_ios18.metallib" "$SRC/mad_kernels.metal" 2> "$OUT/mad_kernels_ios18.err"; then
         (cd "$OUT" && xxd -i mad_kernels_ios18.metallib > mad_kernels_ios18_metallib.h)
         EXTRA+=(-DMAD_HAVE_KERNELS_IOS18)

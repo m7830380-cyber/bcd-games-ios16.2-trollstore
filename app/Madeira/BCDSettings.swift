@@ -1297,7 +1297,7 @@ struct BCDDuoSettingsRoot: View {
             settings(mode: mode)
                 .environment(\.bcdLayout, contentLayout)
                 .onAppear { model.mode = mode; if active { start() } }
-                .onChange(of: mode) { _, new in if active { model.layoutChanged(to: new) } else { model.mode = new } }
+                .bcdOnChange(of: mode) { _, new in if active { model.layoutChanged(to: new) } else { model.mode = new } }
         }
         .coordinateSpace(name: BCDFocus.space)
         .environmentObject(store)
@@ -1306,10 +1306,10 @@ struct BCDDuoSettingsRoot: View {
         .tint(BCDStyle.lavender)
         .preferredColorScheme(.dark)
         .onDisappear { if active { BCDDuoPageOwner.release(owner) } }
-        .onChange(of: active) { _, value in if value { start() } else { BCDDuoPageOwner.release(owner) } }
-        .onChange(of: requestID) { _, _ in if let section { model.go(to: section) } }
+        .bcdOnChange(of: active) { _, value in if value { start() } else { BCDDuoPageOwner.release(owner) } }
+        .bcdOnChange(of: requestID) { _, _ in if let section { model.go(to: section) } }
         .bcdOnScrollInteracting { focus.touched() }
-            .onChange(of: focus.focused) { _, id in
+            .bcdOnChange(of: focus.focused) { _, id in
             guard active else { return }
             model.focusMoved(to: id); model.installButtons()
         }
@@ -1369,11 +1369,11 @@ struct BCDDuoSettingsRoot: View {
             .navigationTitle("Settings")
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
             .bcdOnScrollInteracting { focus.touched() }
-            .onChange(of: focus.focused) { _, id in
+            .bcdOnChange(of: focus.focused) { _, id in
                 guard focus.controllerActive, let id, BCDSettingsID.listSection(id) != nil else { return }
                 revealSidebar(id, proxy)
             }
-            .onChange(of: focus.controllerActive) { _, active in
+            .bcdOnChange(of: focus.controllerActive) { _, active in
                 if active, let id = focus.focused { revealSidebar(id, proxy) }
             }
             .onGeometryChange(for: CGSize.self) { $0.size } action: { _ in

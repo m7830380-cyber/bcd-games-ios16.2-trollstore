@@ -338,14 +338,14 @@ private struct BCDDuoFrontEnd: View {
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("BCDDesktopDidQuit"))) { _ in
             select(.home)
         }
-        .onChange(of: store.restartMessage) { _, message in
+        .bcdOnChange(of: store.restartMessage) { _, message in
             guard let message else { return }
             store.restartMessage = nil
             cardMenu.confirm(BCDGameQuestion(title: "Close BCD to restart?", message: message,
                 confirm: "Close BCD", destructive: false, defaultCancel: true)) { store.closeForRestart?() }
         }
         .simultaneousGesture(TapGesture().onEnded { focus.touched() })
-        .onChange(of: store.inGame) { _, playing in
+        .bcdOnChange(of: store.inGame) { _, playing in
             focus.enabled = !playing
             // The game gets the memory the pictures held; they decode again afterwards.
             if playing { BCDArt.shared.purge() }
@@ -370,8 +370,8 @@ private struct BCDDuoFrontEnd: View {
             .tint(BCDStyle.lavender)
             .preferredColorScheme(.dark)
             .onAppear { focus.scope(to: tab.rawValue + "."); cardMenu.store = store; installButtons() }
-            .onChange(of: tab) { _, _ in DispatchQueue.main.async { installButtons() } }
-            .onChange(of: focus.focused) { _, _ in installButtons() }
+            .bcdOnChange(of: tab) { _, _ in DispatchQueue.main.async { installButtons() } }
+            .bcdOnChange(of: focus.focused) { _, _ in installButtons() }
     }
 
     /// System tabs own their glass and placement: a sidebar on the inner display,

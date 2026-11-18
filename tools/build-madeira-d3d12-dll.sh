@@ -103,7 +103,7 @@ if command -v xcrun > /dev/null 2>&1 &&
     # the SDK's own target (iOS 26.2: AIR 2.8), which iOS 18's loader refuses (it reads
     # AIR 2.7 at most); this copy is AIR 2.7. madeira_d3d12.c loads it only when the
     # first is refused, so iOS 26 and later load exactly what they did.
-    if xcrun -sdk iphoneos metal -std=metal3.0 --target=air64-apple-ios18.0 $MAD_KERNELS_FLAGS \
+    if xcrun -sdk iphoneos metal -std=metal3.0 --target=air64-apple-ios16.0 $MAD_KERNELS_FLAGS \
            -o "$OUT/mad_kernels_ios18.metallib" "$SRC/mad_kernels.metal" 2> "$OUT/mad_kernels_ios18.err"; then
         (cd "$OUT" && xxd -i mad_kernels_ios18.metallib > mad_kernels_ios18_metallib.h)
         KDEF="$KDEF -DMAD_HAVE_KERNELS_IOS18"

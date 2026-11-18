@@ -160,9 +160,9 @@ DXMT_METAL_STD="${DXMT_METAL_STD:-metal3.1}"
 mkdir -p "$OUT/tree/src/dxmt"
 cp "$X/dxmt_command.cpp" "$OUT/tree/src/dxmt/dxmt_command.cpp"
 if command -v xcrun > /dev/null 2>&1 \
-        && (cd "$OUT/gen" && xcrun -sdk macosx metal -std="$DXMT_METAL_STD" --target=air64-apple-macos14.0 \
+        && (cd "$OUT/gen" && xcrun -sdk "${DXMT_METAL_SDK:-macosx}" metal -std="$DXMT_METAL_STD" --target="${DXMT_METAL_TARGET:-air64-apple-macos14.0}" \
                 -o dxmt_command_fresh.air -c "$X/dxmt_command.metal" \
-            && xcrun -sdk macosx metallib -o dxmt_command_fresh.metallib dxmt_command_fresh.air \
+            && xcrun -sdk "${DXMT_METAL_SDK:-macosx}" metallib -o dxmt_command_fresh.metallib dxmt_command_fresh.air \
             && xxd -n dxmt_command_fresh -i dxmt_command_fresh.metallib dxmt_command_fresh.h) > "$OUT/gen/metal-fresh.log" 2>&1 \
         && python3 "$R/tools/patch-d3d11-src-metallib.py" "$OUT/tree/src/dxmt/dxmt_command.cpp"; then
     FRESH_SHADERS=1

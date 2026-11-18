@@ -6,7 +6,7 @@ BCD builds every component from source in one macOS job (build-ipa.yml, about
 so a new BCD release can be taken by re-running this script, and changes only
 what iOS 16 and TrollStore need:
 
-  * runs in this repository, on push to the port's branch, on a public runner;
+  * runs in this repository, by hand or for a v*-trollstore* tag;
   * drops BCD's host checks (tests/host/*: they check BCD's own logic on the
     runner, need inputs that are not in the public repository, and build
     nothing that ships);
@@ -167,15 +167,22 @@ job = head[head.index('concurrency:'):]
 out = lic + [
     'name: Build BCD for iOS 16 (TrollStore .tipa)',
     '',
+    '# The whole build takes hours: started by hand (Actions > Run workflow) or by a',
+    '# release tag, not by every push (which would cancel the run in progress).',
     'on:',
     '  push:',
-    f'    branches: [{BRANCH}]',
     "    tags: ['v*-trollstore*']",
-    "    paths-ignore: ['docs/**', '**.md', '.github/workflows/compile-check-ios16.yml']",
     '  workflow_dispatch:',
     '',
 ]
 for line in job:
+    if line == '    timeout-minutes: 360':
+        # iOS 16 accepts Metal libraries up to Metal 3.0 / AIR 2.5 for an iOS 16 target: DXMT's
+        # command library and the i386 farm's DXMT are built that way (tools/build-d3d11-dll.sh,
+        # build/wine-i386/build.sh, build/dxmt-ios/build.sh read these).
+        out += [line, '    env:', '      DXMT_METAL_SDK: iphoneos', '      DXMT_METAL_TARGET: air64-apple-ios16.0',
+                '      DXMT_METAL_STD: metal3.0', '      MADEIRA_IOS_MIN: "16.0"']
+        continue
     if line.startswith('  group: build-ipa'):
         line = '  group: build-trollstore-${{ github.ref }}'
     if re.match(r"^    if: github.repository == ", line):

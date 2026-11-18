@@ -153,7 +153,9 @@ EOF
     if [ ! -f build-pe-i386/build.ninja ]; then
         SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" \
         meson setup --cross-file "$X" --native-file "$NATIVE" --buildtype release \
-            -Dwine_build_path="$B" -Dwine_builtin_dll=true build-pe-i386
+            -Dwine_build_path="$B" -Dwine_builtin_dll=true \
+            -Dmetal_sdk="${DXMT_METAL_SDK:-macosx}" -Dmetal_target="${DXMT_METAL_TARGET:-air64-apple-macos14.0}" \
+            -Dmetal_std="${DXMT_METAL_STD:-metal3.1}" build-pe-i386
     fi
     SDKROOT="$(xcrun --sdk macosx --show-sdk-path)" meson compile -C build-pe-i386
     for m in d3d11/d3d11.dll dxgi/dxgi.dll d3d10/d3d10core.dll winemetal/winemetal.dll; do

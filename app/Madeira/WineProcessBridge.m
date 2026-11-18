@@ -2768,6 +2768,11 @@ static void *wine_process_thread(void *arg) {
              * files again (nothing changes under this key), and DXMT's opt-in 64-bit Direct3D 9 (the block below) loads this winemetal.dll too. Only the
              * value "1" counts. */
             {
+                /* iOS 16 / TrollStore port: the committed DXMT set embeds a command library built for macOS 14, which iOS 16
+                 * refuses ("This library format is not supported on this platform"); the -src set's comes from the pin, built
+                 * for iOS 16 (DXMT_METAL_TARGET in the port's workflow). Below iOS 17 it is the default; a game's own
+                 * env.MADEIRA_DXMT_FRESH = 0 still keeps the committed set. */
+                if (@available(iOS 17.0, *)) {} else setenv("MADEIRA_DXMT_FRESH", "1", 0);
                 const char *dxmtFresh = getenv("MADEIRA_DXMT_FRESH");
                 if (dxmtFresh && strcmp(dxmtFresh, "1") == 0) {
                     static const char *const freshSet[][2] = {

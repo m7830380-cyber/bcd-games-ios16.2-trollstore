@@ -126,3 +126,18 @@ private struct BCDSeparatedRowsLayout: _VariadicView_MultiViewRoot {
         }
     }
 }
+
+// MARK: - The same, by a name of its own
+
+extension View {
+    /// The backport above where SwiftUI's own onChange is available too (code marked iOS 18), which
+    /// would make `.onChange` ambiguous there.
+    func bcdOnChange<V: Equatable>(of value: V, initial: Bool = false,
+                                   _ action: @escaping (_ oldValue: V, _ newValue: V) -> Void) -> some View {
+        modifier(BCDChangeObserver(value: value, initial: initial, action: action))
+    }
+
+    func bcdOnChange<V: Equatable>(of value: V, initial: Bool = false, _ action: @escaping () -> Void) -> some View {
+        modifier(BCDChangeObserver(value: value, initial: initial, action: { _, _ in action() }))
+    }
+}
