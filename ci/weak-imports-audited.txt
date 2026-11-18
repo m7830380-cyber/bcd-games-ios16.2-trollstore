@@ -1,0 +1,9 @@
+# Weak-imported C functions in the BCD binary whose callers check the iOS
+# version (or that exist on iOS 16 anyway). ci/package-tipa.sh warns about any
+# other: a weak import is NULL on an iOS that lacks it.
+__availability_version_check
+_MTLCopyAllDevices
+_os_sync_wait_on_address
+_os_sync_wait_on_address_with_timeout
+_os_sync_wake_by_address_all
+_os_sync_wake_by_address_any
