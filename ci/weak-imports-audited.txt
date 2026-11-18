@@ -26,6 +26,6 @@ _glIsEnabled
 _glReadBuffer
 _glTexParameteri
 # Metal's private shader-cache path: checked for NULL before the call
-# (ci/patches/dxmt/0007-ios16-guard-private-metal-cache-path.patch).
+# (BCD's tools/patch-winemetal-cache-spi-weak.py).
 _MTLGetShaderCachePath
 _MTLSetShaderCachePath
