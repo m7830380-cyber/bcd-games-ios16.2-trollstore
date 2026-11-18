@@ -31,13 +31,14 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
       - name: Compile
         run: |
-          mkdir -p app/Madeira/x86_64-vcruntime
+          # Folders the full build fills (native libraries, OpenGL/Vulkan, compat): empty here.
+          mkdir -p app/Madeira/x86_64-vcruntime app/Madeira/compat app/Madeira/gl app/Madeira/vulkan
           python3 tools/stikjit-interface-compat.py app/Frameworks/StikJIT.xcframework || true
           set +e
           xcodebuild -project app/Madeira.xcodeproj -scheme Madeira -configuration Debug \
             -destination 'generic/platform=iOS' -derivedDataPath build/DerivedData \
             CODE_SIGNING_ALLOWED=NO COMPILER_INDEX_STORE_ENABLE=NO \
-            -skipPackagePluginValidation build > xcodebuild.log 2>&1
+            -skipPackagePluginValidation -continueBuildingAfterErrors build > xcodebuild.log 2>&1
           echo "xcodebuild exit $?"
           echo "== errors =="
           grep -E "^[^ ].*: (error|fatal error):" xcodebuild.log | sort -u > errors.txt

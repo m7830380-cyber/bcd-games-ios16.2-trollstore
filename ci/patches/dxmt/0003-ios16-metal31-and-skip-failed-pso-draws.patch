@@ -2,30 +2,6 @@ diff --git a/src/d3d11/d3d11_context_impl.cpp b/src/d3d11/d3d11_context_impl.cpp
 index 1e2a92f..5162009 100644
 --- a/src/d3d11/d3d11_context_impl.cpp
 +++ b/src/d3d11/d3d11_context_impl.cpp
-@@ -4974,8 +4974,9 @@ public:
-       pso->GetPipeline(&GraphicsPipeline); // may block
-       enc.tess_num_output_control_point_element = GraphicsPipeline.NumControlPointOutputElement;
-       enc.tess_threads_per_patch = GraphicsPipeline.ThreadsPerPatch;
--      if (!GraphicsPipeline.PipelineState)
--        return;
-+      // Madeira iOS 16: a PSO that failed to compile is still emitted (as a
-+      // null pso) so winemetal skips the draws that would have used it,
-+      // rather than drawing with no pipeline (AGX null dereference).
-       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
-       cmd.type = WMTRenderCommandSetPSO;
-       cmd.pso = GraphicsPipeline.PipelineState;
-@@ -5020,8 +5021,9 @@ public:
-       render_encoder->use_geometry = 1;
-       MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
-       pso->GetPipeline(&GraphicsPipeline); // may block
--      if (!GraphicsPipeline.PipelineState)
--        return;
-+      // Madeira iOS 16: a PSO that failed to compile is still emitted (as a
-+      // null pso) so winemetal skips the draws that would have used it,
-+      // rather than drawing with no pipeline (AGX null dereference).
-       auto &cmd = enc.encodeRenderCommand<wmtcmd_render_setpso>();
-       cmd.type = WMTRenderCommandSetPSO;
-       cmd.pso = GraphicsPipeline.PipelineState;
 @@ -5075,8 +5077,9 @@ public:
      EmitST([pso = std::move(pipeline)](ArgumentEncodingContext& enc) {
        MTL_COMPILED_GRAPHICS_PIPELINE GraphicsPipeline{};
