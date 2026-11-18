@@ -7,3 +7,25 @@ _os_sync_wait_on_address
 _os_sync_wait_on_address_with_timeout
 _os_sync_wake_by_address_all
 _os_sync_wake_by_address_any
+# OpenGLES.framework is weak-linked (BCD's project), so all of its functions are
+# weak imports; iOS 16 has the framework, and WiniosGL.m is its only caller.
+_glBindFramebuffer
+_glBindTexture
+_glBlitFramebuffer
+_glCheckFramebufferStatus
+_glDeleteFramebuffers
+_glDeleteTextures
+_glDisable
+_glEnable
+_glFinish
+_glFramebufferTexture2D
+_glGenFramebuffers
+_glGenTextures
+_glGetIntegerv
+_glIsEnabled
+_glReadBuffer
+_glTexParameteri
+# Metal's private shader-cache path: checked for NULL before the call
+# (ci/patches/dxmt/0007-ios16-guard-private-metal-cache-path.patch).
+_MTLGetShaderCachePath
+_MTLSetShaderCachePath

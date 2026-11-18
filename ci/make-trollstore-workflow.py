@@ -164,7 +164,18 @@ STIKJIT = block('''\
         shell: bash
         run: python3 tools/stikjit-interface-compat.py app/Frameworks/StikJIT.xcframework || true''')
 
+GNUTLS = block('''\
+      # iOS 16 / TrollStore port: the app links app/Madeira/lib{gmp,nettle,hogweed,gnutls}.a,
+      # which BCD commits built for iOS 17; the stack this job builds (or restores) is for iOS 16.
+      - name: "iOS 16: link the iOS 16 GnuTLS stack"
+        run: |
+          for l in gmp nettle hogweed gnutls; do
+            cp toolchains/gnutls-ios/lib/lib$l.a app/Madeira/lib$l.a
+          done''')
+
 kept.insert(find('Select newest Xcode') + 1, PREPARE)
+GNUTLS['lines'].append('')
+kept.insert(find('Verify GnuTLS iOS headers and libs') + 1, GNUTLS)
 kept.insert(find('Archive (unsigned)'), STIKJIT)
 kept.insert(find('Verify the macdrv symbols DXMT resolves at runtime') + 1, PACKAGE)
 

@@ -330,6 +330,14 @@ jobs:
             exit 1
           fi
 
+      # iOS 16 / TrollStore port: the app links app/Madeira/lib{gmp,nettle,hogweed,gnutls}.a,
+      # which BCD commits built for iOS 17; the stack this job builds (or restores) is for iOS 16.
+      - name: "iOS 16: link the iOS 16 GnuTLS stack"
+        run: |
+          for l in gmp nettle hogweed gnutls; do
+            cp toolchains/gnutls-ios/lib/lib$l.a app/Madeira/lib$l.a
+          done
+
       - name: Save GnuTLS iOS stack
         if: steps.gnutlscache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4

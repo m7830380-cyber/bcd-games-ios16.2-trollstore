@@ -37,9 +37,9 @@ weak_c=$(nm -m -u "$BIN" | grep "weak external" | awk '{print $4}' | grep -v '^_
 unaudited=$(comm -23 <(echo "$weak_c") <(grep -v '^#' "$audited_file" | sort -u))
 echo "$(echo "$weak_c" | grep -c . || true) weak C imports"
 if [ -n "$unaudited" ]; then
-    echo "::warning::weak-imported C functions not yet in ci/weak-imports-audited.txt (NULL on older iOS unless the caller checks):"
+    echo "::error::weak-imported C functions not in ci/weak-imports-audited.txt (NULL on older iOS unless the caller checks):"
     echo "$unaudited"
-    [ "${STRICT_WEAK:-0}" = 1 ] && exit 1
+    [ "${STRICT_WEAK:-1}" = 1 ] && exit 1
 fi
 
 echo "== strongly linked system libraries"
@@ -61,9 +61,10 @@ for f in "$R"/app/Madeira/lib*.a "$R"/FEX/build-ios/FEXCore/Source/*.a; do
     v=$(otool -l "$f" 2>/dev/null | awk '$1=="minos"{print $2}' | sort -uV | tail -1)
     printf '  %-32s %s\n' "$(basename "$f")" "${v:-?}"
     if [ -n "$v" ] && [ "$(printf '%s\n16.0\n' "$v" | sort -V | tail -1)" != "16.0" ]; then
-        echo "::warning::$(basename "$f") targets iOS $v, newer than 16.0"
+        echo "::error::$(basename "$f") targets iOS $v, newer than 16.0"; bad=1
     fi
 done
+[ $bad = 0 ] || exit 1
 
 echo "== stage"
 STAGE="$OUT/stage"; rm -rf "$STAGE"; mkdir -p "$STAGE/Payload"
