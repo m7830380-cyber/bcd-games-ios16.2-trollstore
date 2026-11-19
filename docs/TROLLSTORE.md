@@ -49,9 +49,14 @@ Observation for the rest).
 - every strong libc++ import of the binary exists in iOS 15.6's libc++
   (`ci/libcxx-ios15.6-exports.txt`);
 - weak-imported C functions are listed in `ci/weak-imports-audited.txt`
-  (a warning names any new one: it is NULL on an iOS that lacks it);
+  (any new one fails the build: it is NULL on an iOS that lacks it);
 - no framework newer than iOS 16 is linked strongly;
-- the deployment target of every linked native archive.
+- every linked native archive targets iOS 16.0 or older (the build fails
+  otherwise).
+
+Last full build that passed all of these: run 44462979640 (`7edef51`),
+`BCD-trollstore-tipa` about 224 MB. The binary and all 16 native archives
+target iOS 16.0, and all 160 libc++ imports exist in iOS 15.6's libc++.
 
 What is not verified: running on a device. Logs are under **Settings › Logs**.
 
