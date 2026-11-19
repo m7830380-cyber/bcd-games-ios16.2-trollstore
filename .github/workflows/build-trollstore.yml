@@ -311,7 +311,7 @@ jobs:
             toolchains/gnutls-ios
             build/gnutls-ios/obj
             build/gnutls-ios/src
-          key: gnutls-ios-gmp6.3.0-nettle3.10.1-gnutls3.8.9-v1
+          key: gnutls-ios-gmp6.3.0-nettle3.10.1-gnutls3.8.9-ios16.0-v1
 
       - name: Build GnuTLS stack for iOS
         if: steps.gnutlscache.outputs.cache-hit != 'true'
@@ -346,7 +346,7 @@ jobs:
             toolchains/gnutls-ios
             build/gnutls-ios/obj
             build/gnutls-ios/src
-          key: gnutls-ios-gmp6.3.0-nettle3.10.1-gnutls3.8.9-v1
+          key: gnutls-ios-gmp6.3.0-nettle3.10.1-gnutls3.8.9-ios16.0-v1
 
       # Upstream's winegstreamer unix side (build/ntdll-unix) compiles against
       # toolchains/ffmpeg-ios, and the app target links the four archives from

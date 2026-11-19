@@ -220,5 +220,8 @@ text = [
 ] + out + pre
 for s in kept:
     text += s['lines']
+# BCD's GnuTLS cache key names only the library versions, so a stack cached by a
+# build for a newer iOS would be restored as is; key it to the iOS 16.0 build.
+text = [t.replace('gnutls3.8.9-v1', 'gnutls3.8.9-ios16.0-v1') for t in text]
 open(DST, 'w').write('\n'.join(text).rstrip('\n') + '\n')
 print(f'{DST}: {len(kept)} steps kept of {len(steps)}; dropped {dropped}')
