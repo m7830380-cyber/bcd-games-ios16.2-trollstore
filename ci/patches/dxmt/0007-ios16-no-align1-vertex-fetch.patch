@@ -1,0 +1,51 @@
+diff --git a/src/airconv/dxbc_converter_basicblock.cpp b/src/airconv/dxbc_converter_basicblock.cpp
+index f9bad1c..1fda141 100644
+--- a/src/airconv/dxbc_converter_basicblock.cpp
++++ b/src/airconv/dxbc_converter_basicblock.cpp
+@@ -27,6 +27,7 @@
+ #include <stack>
+ #include <cstdio>
+ #include <cstdlib>
++#include <sys/sysctl.h> /* Madeira iOS 16: OS version for the vfetch-align default */
+ 
+ char dxmt::UnsupportedFeature::ID;
+ 
+@@ -520,8 +521,24 @@ IREffect pull_vertex_input(
+     if (madeira_align_mode < 0) {
+       const char *e = getenv("MADEIRA_VFETCH_ALIGN1");
+       madeira_align_mode = (e && e[0] == '0') ? 0 : (e && e[0] == '1') ? 1 : 2;
++      /* Madeira iOS 16 (TrollStore fork): iOS 16's GPU compiler fails every
++       * pipeline whose vertex shader has these align-1 vector device loads
++       * ("Compiler encountered an internal error"; the Unity blit shaders of
++       * People Playground, all SM 4.x), and the compiler service then stalls
++       * the render thread for good. Off by default below iOS 17; only an
++       * explicit MADEIRA_VFETCH_ALIGN1=1 turns it back on there. */
++      if (madeira_align_mode == 2) {
++        char v[32] = {0};
++        size_t n = sizeof(v) - 1;
++        int major = sysctlbyname("kern.osproductversion", v, &n, NULL, 0) == 0 ? atoi(v) : 0;
++        if (major > 0 && major < 17) {
++          madeira_align_mode = 0;
++          fprintf(stderr, "[vfetch-align] madeira-bcd byte-aligned vertex fetch off on iOS %d "
++                          "(its GPU compiler fails align-1 loads; MADEIRA_VFETCH_ALIGN1=1 forces it)\n", major);
++        }
++      }
+       fprintf(stderr, "[vfetch-align] madeira-bcd byte-aligned vertex fetch %s\n",
+-              madeira_align_mode == 0 ? "off (MADEIRA_VFETCH_ALIGN1=0)"
++              madeira_align_mode == 0 ? "off (MADEIRA_VFETCH_ALIGN1=0 or iOS < 17)"
+               : madeira_align_mode == 1 ? "on for every shader (MADEIRA_VFETCH_ALIGN1=1)"
+                                         : "on for SM 4.x vertex shaders");
+     }
+diff --git a/src/dxmt/dxmt_shader_cache.hpp b/src/dxmt/dxmt_shader_cache.hpp
+index c8ee5e0..8e73c51 100644
+--- a/src/dxmt/dxmt_shader_cache.hpp
++++ b/src/dxmt/dxmt_shader_cache.hpp
+@@ -5,7 +5,7 @@
+ 
+ namespace dxmt {
+ 
+-constexpr int kDXMTShaderCacheVersion = 18; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch */
++constexpr int kDXMTShaderCacheVersion = 19; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17 */
+ 
+ // Base directory every DXMT cache lives under, so the Metal shader cache and
+ // this one cannot disagree about where that is.

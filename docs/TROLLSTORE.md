@@ -88,3 +88,15 @@ The pieces the port adds:
 | `ci/fetch-msc-dylib.sh` | Apple's Metal Shader Converter runtime from upstream Madeira at a pinned commit, hash-checked (BCD's public repository leaves it out) |
 | `ci/package-tipa.sh` | the checks above, ldid signing, the `.tipa` |
 | `ci/pbx-add.py` | adds a source file to the Xcode project |
+
+## Unity games: white screen on iOS 16 (fixed by dxmt patch 0007)
+
+People Playground (Unity, D3D11) ran with sound but never drew a frame on an
+iPhone 14 Pro Max with iOS 16.2. The GPU compiler failed four pipelines with
+"Compiler encountered an internal error" and then held UnityGfxDeviceWorker in
+a blit encoder for good. Every failing vertex shader (dumped to
+`C:\dxmt-failed`) was SM 4.x and carried the align-1 vertex loads from BCD's
+byte-aligned vertex fetch (tools/patch-dxmt-vb-align.py), which turned on just
+before the first failure. Patch 0007 leaves that fetch off below iOS 17
+(`MADEIRA_VFETCH_ALIGN1=1` still forces it) and bumps the shader cache version
+so shaders converted with it are converted again.
