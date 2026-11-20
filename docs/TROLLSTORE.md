@@ -100,3 +100,17 @@ byte-aligned vertex fetch (tools/patch-dxmt-vb-align.py), which turned on just
 before the first failure. Patch 0007 leaves that fetch off below iOS 17
 (`MADEIRA_VFETCH_ALIGN1=1` still forces it) and bumps the shader cache version
 so shaders converted with it are converted again.
+
+### Still white after 0007: the PSO probe (dxmt patch 0008)
+
+Patch 0007 removed the align-1 loads, but iOS 16.2 still fails People
+Playground's trivial blit pipeline with "Compiler encountered an internal
+error". Patch 0008 adds a one-shot background probe after the first failed
+render pipeline (on by default below iOS 17, `MADEIRA_PSO_PROBE=0` turns it
+off). It compiles MSL controls and variants of the failing blit shaders, each
+with one change (a bare skeleton, LLVM 14 encoding, other triple/AIR version,
+non-packed return struct, no module flags, no vertex pulling, no argument
+buffer, no `air.fma`, no NaN select), and logs one `[pso-probe]` line each.
+The variants are built by `ci/tools/gen-pso-probe.py` from the dumped
+metallibs. Let the game sit on the white screen until `[pso-probe] end`
+appears (a failing compile can take ~30 s), then send `bcd-log.txt`.
