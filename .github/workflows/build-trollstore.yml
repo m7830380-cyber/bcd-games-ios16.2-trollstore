@@ -55,6 +55,21 @@ jobs:
             echo "::notice::selected $NEWEST"
           fi
 
+      # iOS 16 fork: the Metal compiler must exist before the first DXMT build (Build d3d11-src.dll, below). The
+      # xcode-27-arm64 image of 2026-11-19 ships Xcode without the Metal Toolchain; that build then fell back to upstream's
+      # macOS 14 library of DXMT's internal shaders, which iOS 16 refuses ("This library format is not supported on this
+      # platform"), and DXMT aborted at device creation. The later "Ensure Metal compiler" step finds it present.
+      - name: Ensure Metal compiler (before the DXMT builds)
+        shell: bash
+        run: |
+          if xcrun -sdk iphoneos metal --version 2>&1 | head -3 && xcrun -sdk iphoneos metal --version > /dev/null 2>&1; then
+            echo "::notice::metal compiler already present"
+          else
+            echo "metal missing -- downloading the Metal Toolchain"
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun -sdk iphoneos metal --version || { echo "::error::no Metal compiler after the download"; exit 1; }
+          fi
+
       # madeira-bcd FORK-ONLY: one build-number sequence across GitHub Actions
       # and the owner's Mac (owner's decision 2026-10-13). This build's number is
       # in docs/local-build/BUILD-NUMBER: the Mac's run.sh, or a cloud session
@@ -2291,7 +2306,9 @@ jobs:
           if [ -n "$FRESH_MISSING" ]; then
             echo "::warning::the fresh 64-bit DXMT set is incomplete (missing:$FRESH_MISSING): env.MADEIRA_DXMT_FRESH = 1 links nothing in this IPA"
           elif ! LC_ALL=C grep -aqF "[dxmt-shaders] madeira-bcd" app/Madeira/arm64ec-windows/d3d11-src.dll; then
-            echo "::warning::d3d11-src.dll has no [dxmt-shaders] switch: env.MADEIRA_DXMT_FRESH = 1 links the fresh set with upstream's internal shaders"
+            # iOS 16 fork: upstream's internal shaders are a macOS 14 library that iOS 16 refuses, so DXMT aborts: fail here.
+            echo "::error::d3d11-src.dll has no [dxmt-shaders] switch: env.MADEIRA_DXMT_FRESH = 1 links the fresh set with upstream's macOS internal shaders, which iOS 16 refuses"
+            exit 1
           else
             echo "::notice::the fresh 64-bit DXMT set is complete (d3d11-src, dxgi-src, d3d10core-src, winemetal-src and the internal shaders compiled from the pin): env.MADEIRA_DXMT_FRESH = 1 selects it"
           fi
