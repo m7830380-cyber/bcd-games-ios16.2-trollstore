@@ -1,6 +1,6 @@
 diff --git a/src/winemetal/unix/pso_probe_data.h b/src/winemetal/unix/pso_probe_data.h
 new file mode 100644
-index 0000000..572bbbd
+index 0000000..edc7eba
 --- /dev/null
 +++ b/src/winemetal/unix/pso_probe_data.h
 @@ -0,0 +1,3240 @@
@@ -3238,7 +3238,7 @@ index 0000000..572bbbd
 +  {"PS ab ulong", 0, 0, 0, pso_probe_lib_444b243435b5, sizeof(pso_probe_lib_444b243435b5), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
 +  {"PS ab tex ptr", 0, 0, 0, pso_probe_lib_2384556c5f14, sizeof(pso_probe_lib_2384556c5f14), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
 +  {"PS orig lod 0", 0, 0, 0, pso_probe_lib_94c7358126ce, sizeof(pso_probe_lib_94c7358126ce), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
-+  {"PS orig "float, sample"", 0, 0, 0, pso_probe_lib_51cc151438b3, sizeof(pso_probe_lib_51cc151438b3), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
++  {"PS orig apple tex typename", 0, 0, 0, pso_probe_lib_51cc151438b3, sizeof(pso_probe_lib_51cc151438b3), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
 +  {"PS direct tex+smp", 0, 0, 0, pso_probe_lib_8b4a4a26b83f, sizeof(pso_probe_lib_8b4a4a26b83f), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
 +  {"PS direct tex+smp +meta", 0, 0, 0, pso_probe_lib_6f2f4b26c0b8, sizeof(pso_probe_lib_6f2f4b26c0b8), "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c"},
 +  {"VS orig", pso_probe_lib_01be529c5fcc, sizeof(pso_probe_lib_01be529c5fcc), "vs_3139aeb0_965bb8141ddd906555208b8fbc69868894972b54", 0, 0, 0},

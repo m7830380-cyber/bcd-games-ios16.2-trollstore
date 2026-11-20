@@ -276,7 +276,7 @@ tests = [
     ('PS ab ulong',             None, P(asm(ps_ab_meta, 'ps_ab_meta'))),
     ('PS ab tex ptr',           None, P(asm(ps_ab_tex, 'ps_ab_tex'))),
     ('PS orig lod 0',           None, P(asm(ps_lod0, 'ps_lod0'))),
-    ('PS orig "float, sample"', None, P(asm(ps_ab_min, 'ps_ab_min'))),
+    ('PS orig apple tex typename', None, P(asm(ps_ab_min, 'ps_ab_min'))),
     ('PS direct tex+smp',       None, P(asm(ps_direct, 'ps_direct'))),
     ('PS direct tex+smp +meta', None, P(asm(meta(ps_direct), 'ps_direct_meta'))),
     ('VS orig',                 (vs_ml['raw'], vs_fn), None),
@@ -309,6 +309,6 @@ with open(out_h, 'w') as f:
     for name, v, p in rows:
         vv = '%s, sizeof(%s), "%s"' % (v[0], v[0], v[1]) if v else '0, 0, 0'
         pp = '%s, sizeof(%s), "%s"' % (p[0], p[0], p[1]) if p else '0, 0, 0'
-        f.write('  {"%s", %s, %s},\n' % (name, vv, pp))
+        f.write('  {"%s", %s, %s},\n' % (name.replace("\\", "\\\\").replace("\"", "\\\""), vv, pp))
     f.write('};\n')
 print(len(tests), 'tests,', len(blobs), 'libraries,', sum(map(len, blobs.values())), 'bytes')
