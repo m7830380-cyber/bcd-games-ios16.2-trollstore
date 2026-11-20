@@ -75,7 +75,14 @@ A="$STAGE/Payload/Madeira.app"
 rm -rf "$A/PlugIns/MadeiraJITHelper.appex" "$A/PlugIns/MadeiraMemoryHost.appex" "$A/Frameworks/StikJIT.framework"
 rmdir "$A/PlugIns" 2>/dev/null || true
 # KosmicKrisp is iOS 26 only and never loaded below it.
-rm -f "$A/gl/libvulkan_kosmickrisp.dylib" "$A/gl/libvulkan_kosmickrisp.version"
+rm -f "$A/gl/libvulkan_kosmickrisp.dylib" "$A/gl/libvulkan_kosmickrisp.version" "$A/gl/libvulkan_kosmickrisp_real.dylib"
+# Bundled libraries are loaded with dlopen, so one built for a newer iOS shows up only at run time: name it here.
+while IFS= read -r f; do
+    v=$(otool -l "$f" 2>/dev/null | awk '$1=="minos"{print $2}' | sort -uV | tail -1)
+    if [ -n "$v" ] && [ "$(printf '%s\n16.0\n' "$v" | sort -V | tail -1)" != "16.0" ]; then
+        echo "::warning::${f#$A/} targets iOS $v, newer than 16.0"
+    fi
+done < <(find "$A" -type f \( -name '*.dylib' -o -name '*.so' \))
 find "$A" -name '_CodeSignature' -type d -prune -exec rm -rf {} +
 rm -f "$A/embedded.mobileprovision"
 /usr/libexec/PlistBuddy -c "Delete :MadeiraPort" "$A/Info.plist" >/dev/null 2>&1 || true

@@ -173,7 +173,34 @@ GNUTLS = block('''\
             cp toolchains/gnutls-ios/lib/lib$l.a app/Madeira/lib$l.a
           done''')
 
+METAL = block('''\
+      # iOS 16 fork: the Metal compiler must exist before the first DXMT build (Build d3d11-src.dll, below). The
+      # xcode-27-arm64 image of 2026-11-19 ships Xcode without the Metal Toolchain; that build then fell back to upstream's
+      # macOS 14 library of DXMT's internal shaders, which iOS 16 refuses ("This library format is not supported on this
+      # platform"), and DXMT aborted at device creation. The later "Ensure Metal compiler" step finds it present.
+      - name: Ensure Metal compiler (before the DXMT builds)
+        shell: bash
+        run: |
+          if xcrun -sdk iphoneos metal --version 2>&1 | head -3 && xcrun -sdk iphoneos metal --version > /dev/null 2>&1; then
+            echo "::notice::metal compiler already present"
+          else
+            echo "metal missing -- downloading the Metal Toolchain"
+            xcodebuild -downloadComponent MetalToolchain
+            xcrun -sdk iphoneos metal --version || { echo "::error::no Metal compiler after the download"; exit 1; }
+          fi''')
+
 kept.insert(find('Select newest Xcode') + 1, PREPARE)
+# the comment lines that close 'Select newest Xcode' introduce the step after it: keep them below METAL
+_sel = kept[find('Select newest Xcode')]['lines']
+_tail = []
+while _sel and (_sel[-1].strip().startswith('#') or not _sel[-1].strip()):
+    _tail.insert(0, _sel.pop())
+_sel.append('')
+while _tail and not _tail[0].strip():
+    _tail.pop(0)
+if _tail:
+    METAL['lines'] += [''] + _tail
+kept.insert(find('Select newest Xcode') + 1, METAL)
 GNUTLS['lines'].append('')
 kept.insert(find('Verify GnuTLS iOS headers and libs') + 1, GNUTLS)
 kept.insert(find('Archive (unsigned)'), STIKJIT)
@@ -223,5 +250,15 @@ for s in kept:
 # BCD's GnuTLS cache key names only the library versions, so a stack cached by a
 # build for a newer iOS would be restored as is; key it to the iOS 16.0 build.
 text = [t.replace('gnutls3.8.9-v1', 'gnutls3.8.9-ios16.0-v1') for t in text]
+# BCD only warns when d3d11-src.dll embeds upstream's internal shaders; on iOS 16 that library is refused and
+# DXMT aborts at device creation, so the port fails the build instead.
+WARN = '            echo "::warning::d3d11-src.dll has no [dxmt-shaders] switch: env.MADEIRA_DXMT_FRESH = 1 links the fresh set with upstream\'s internal shaders"'
+FAIL = ['            # iOS 16 fork: upstream\'s internal shaders are a macOS 14 library that iOS 16 refuses, so DXMT aborts: fail here.',
+        '            echo "::error::d3d11-src.dll has no [dxmt-shaders] switch: env.MADEIRA_DXMT_FRESH = 1 links the fresh set with upstream\'s macOS internal shaders, which iOS 16 refuses"',
+        '            exit 1']
+if text.count(WARN) != 1:
+    sys.exit(f'[dxmt-shaders] warning found {text.count(WARN)} times, expected 1')
+i = text.index(WARN)
+text[i:i + 1] = FAIL
 open(DST, 'w').write('\n'.join(text).rstrip('\n') + '\n')
 print(f'{DST}: {len(kept)} steps kept of {len(steps)}; dropped {dropped}')

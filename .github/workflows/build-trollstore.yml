@@ -436,9 +436,45 @@ jobs:
 
       # madeira-bcd (KosmicKrisp; docs/VULKAN.md): Mesa's Vulkan on Metal 4 as a third dylib in app/Madeira/gl/, for a game whose own file says
       # vulkan = kosmickrisp (iOS 26 and a Metal 4 GPU; every other game and every other device never loads it). build-kosmickrisp-bcd.sh fetches the
-      # sources by checksum or commit (Mesa b39d173c with the Playport authors' 19 patches; SPIRV-Tools and SPIRV-LLVM-Translator for the build
+      # sources by checksum or commit (Mesa b39d173c with the Playport authors' 31 patches and BCD's four; SPIRV-Tools and SPIRV-LLVM-Translator for the build
       # machine's compilers) and needs Homebrew's llvm. The result is cached on the scripts and the patches. A failure here only warns: no list and
       # no auto-tune rule turns this driver on, and a bundle without it keeps Vulkan off for such a game and says so in the log.
+      - name: Restore patched MoltenVK (second Vulkan library)
+        id: mvkpcache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            app/Madeira/gl/libMoltenVK_patched.dylib
+            app/Madeira/gl/libMoltenVK_patched.version
+          key: moltenvk-patched-v1-${{ hashFiles('build/moltenvk-ios/build-patched.sh', 'build/moltenvk-ios/patches/*.patch') }}
+
+      - name: Build patched MoltenVK for iOS
+        id: mvkpbuild
+        if: steps.mvkpcache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: bash build/moltenvk-ios/build-patched.sh
+
+      - name: Save patched MoltenVK
+        if: steps.mvkpcache.outputs.cache-hit != 'true' && steps.mvkpbuild.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            app/Madeira/gl/libMoltenVK_patched.dylib
+            app/Madeira/gl/libMoltenVK_patched.version
+          key: moltenvk-patched-v1-${{ hashFiles('build/moltenvk-ios/build-patched.sh', 'build/moltenvk-ios/patches/*.patch') }}
+
+      # A build whose patched MoltenVK step failed must not carry a library of an earlier recipe (or a half-written one): the package then has none.
+      - name: Drop a stale patched MoltenVK after a failed build
+        if: steps.mvkpcache.outputs.cache-hit != 'true' && steps.mvkpbuild.outcome != 'success'
+        run: |
+          rm -f app/Madeira/gl/libMoltenVK_patched.dylib app/Madeira/gl/libMoltenVK_patched.dylib.tmp app/Madeira/gl/libMoltenVK_patched.version
+          echo "::warning::The patched MoltenVK was not built: vulkan = moltenvk-patched stays off in this build"
+
+      # A game's own *.log lines (errors, GPU / driver / display lines) in the
+      # session log as [guest-log] -- the mirror this fork's wine had before the
+      # build 222 switch (Ghost of Tsushima's "Failed to get GPU Driver Info").
+      # Patches wine/dlls/ntdll/unix/file.c in place; the submodule pin and the
+      # cache keys (wine revision) do not change. MADEIRA_GUEST_LOG=all|0.
       - name: Patch wine with the game text-log mirror
         run: |
           python3 tools/patch-wine-guest-log.py wine/dlls/ntdll/unix/file.c
@@ -536,6 +572,14 @@ jobs:
         run: |
           python3 tools/patch-wine-dir-storm.py wine/dlls/ntdll/unix/file.c
 
+      # madeira-bcd (engine review 2026-11-18): get_file_info and fd_get_file_info read two extended attributes of one file and listed the
+      # file's attribute names before each read; one list now answers both (half of every directory listing was the second list: Valve's CEG
+      # job of a Dock start lists system32 about 14 times a second). The same values, results and errno; env MADEIRA_XATTR_ONE_LIST = 0 lists
+      # once per name again.
+      - name: Patch wine to list a file's extended attributes once
+        run: |
+          python3 tools/patch-wine-file-xattr-one-list.py wine/dlls/ntdll/unix/file.c
+
       # madeira-bcd (build 632, upstream Madeira 0.2.0 / Wine fork commits 9a64361cc + 3e1dcdfda; Terraria "Failed to load asset: PixelShader",
       # six logs, builds 576-592): NtQueryDirectoryFile reads a directory by its absolute path instead of through the cwd every pseudo-process
       # shares, and each process id has its own directory cache array. Fork commits (no script); this proves BCD's file.c scripts above still
@@ -545,8 +589,8 @@ jobs:
 
       # madeira-bcd (night round 2026-11-11, Garry's Mod GYG6SG, T2 S-GM1): env.MADEIRA_DNS_REFUSE_CRASH = 1 makes the wrapper above answer
       # crash.steampowered.com with EAI_NONAME at once (Valve's crash upload blocked a Dock start for 150 s on a network that drops the host).
-      # Opt-in (the policy default is in the script); every other name is looked up as before.
-      - name: Patch wine so the DNS wrapper can refuse Valve's crash upload host (opt-in)
+      # On by default from build 674 (the owner's test on 673; env.MADEIRA_DNS_REFUSE_CRASH = 0 turns it off); every other name is looked up as before.
+      - name: Patch wine so the DNS wrapper refuses Valve's crash upload host (on by default)
         run: |
           python3 tools/patch-wine-dns-refuse-crash.py wine/dlls/ws2_32/unixlib.c
 
@@ -675,6 +719,15 @@ jobs:
       - name: Patch wine so non-alertable sleeps can run I/O completions
         run: python3 tools/patch-wine-sleep-kernel-apc.py wine/dlls/ntdll/unix/sync.c
 
+      # madeira-bcd (build 666, pull request #55 by bogsen): env.MADEIRA_OVERLAPPED_SYSTEM_APC = 1 (default off): a nonblocking
+      # GetOverlappedResult(Ex) poll that finds the I/O still pending yields once, and NtYieldExecution delivers the thread's queued
+      # system I/O completions (never a user APC), so UplayService's poll loop sees its reads finish (Trackmania). Applied to the 64-bit
+      # unix ntdll (sync.c) and the i386 farm's kernelbase; dlls/kernelbase/file.c is put back after the farm, like the farm-only patches,
+      # and the 64-bit side runs only in kernelbase-optin.dll (tools/build-wine-extra-dlls.sh, env.MADEIRA_OPTIN_DLLS = kernelbase): the
+      # shipped kernelbase.dll is never rebuilt. Checked by "Check nonblocking I/O completion delivery".
+      - name: Enable opt-in overlapped I/O completion checkpoints
+        run: python3 tools/patch-wine-overlapped-system-apc.py wine
+
       # madeira-bcd: env.MADEIRA_WOA_RECHECK = 1 (default off): an infinite RtlWaitOnAddress in the 32-bit ntdll (the i386 farm's)
       # waits in one-second slices and returns when a waker removed its entry but the alert never came; the unix side keeps the
       # [waiters] registry's park across the slices, and without the switch waits a slice out as the infinite wait it stands for.
@@ -711,6 +764,8 @@ jobs:
           grep -q wine_vk_client_ptr wine/dlls/winevulkan/vulkan_thunks.c
           grep -q host_alloc wine/dlls/win32u/vulkan.c
 
+      # Engine review 2026-11-17: the unix side is compiled with -Wno-implicit-function-declaration, so an undeclared function that returns
+      # 64 bits is silently cut to 32 (mach_absolute_time in signal_arm64_ios.c was). Every undeclared call must be a known int/void one.
       - name: Build ntdll-unix
         # Keep going so one run reports every broken stage (and caches FEX and
         # LLVM). "Verify all linked archives exist" still fails the job before
@@ -929,10 +984,9 @@ jobs:
           path: toolchains/llvm-mingw-20260421-ucrt-macos-universal
           key: llvm-mingw-20260421-ucrt-macos-universal
 
-      # madeira-bcd (OpenGL, LOVE games such as Balatro): a GC64 LuaJIT (build/luajit-x64) the wineserver maps in place of a game's own lua51.dll
-      # when that is an x64 LuaJIT that needs memory below 2 GB, which iOS never gives (build/wineserver/luajit_compat.c; only in a session whose game
-      # has gl-backend on). The source is fetched at its pinned commit. A failure only loses that substitution (the game keeps its own DLL, as before),
-      # so it does not fail the build.
+      # Bundle stock GC64 LuaJIT for LÖVE games and a second variant for
+      # games whose Lua scripts use C-style comments. The loader selects the
+      # variant for the session (build/wineserver/luajit_compat.c).
       - name: Restore GC64 LuaJIT (LOVE games)
         id: lovecache
         uses: actions/cache/restore@v4
@@ -940,8 +994,9 @@ jobs:
           path: |
             app/Madeira/compat/love/lua51.dll
             app/Madeira/compat/love/lua51.dll.version
+            app/Madeira/compat/lua-c-comments/lua51.dll
             app/Madeira/licenses/LuaJIT-MIT.txt
-          key: luajit-gc64-v1-${{ hashFiles('build/luajit-x64/build.sh') }}
+          key: luajit-gc64-v1-${{ hashFiles('build/luajit-x64/build.sh', 'build/luajit-x64/*.patch') }}
 
       - name: Build the GC64 LuaJIT (LOVE games)
         if: steps.lovecache.outputs.cache-hit != 'true' && env.MINGW_OK == '1'
@@ -949,14 +1004,15 @@ jobs:
         run: bash build/luajit-x64/build.sh
 
       - name: Save GC64 LuaJIT (LOVE games)
-        if: steps.lovecache.outputs.cache-hit != 'true' && hashFiles('app/Madeira/compat/love/lua51.dll') != ''
+        if: steps.lovecache.outputs.cache-hit != 'true' && hashFiles('app/Madeira/compat/love/lua51.dll') != '' && hashFiles('app/Madeira/compat/lua-c-comments/lua51.dll') != ''
         uses: actions/cache/save@v4
         with:
           path: |
             app/Madeira/compat/love/lua51.dll
             app/Madeira/compat/love/lua51.dll.version
+            app/Madeira/compat/lua-c-comments/lua51.dll
             app/Madeira/licenses/LuaJIT-MIT.txt
-          key: luajit-gc64-v1-${{ hashFiles('build/luajit-x64/build.sh') }}
+          key: luajit-gc64-v1-${{ hashFiles('build/luajit-x64/build.sh', 'build/luajit-x64/*.patch') }}
 
       # env.MADEIRA_DXGI_BUDGET_EVENTS = 1 (opt-in): the budget-change events
       # tools/patch-dxgi-budget-events.py adds to dxgi-src.dll, checked (and
@@ -1161,6 +1217,11 @@ jobs:
           sed -i '' 's/MATCHES "Darwin"/MATCHES "Darwin|iOS"/' \
             toolchains/llvm-project/llvm/cmake/modules/AddLLVM.cmake
           grep -n 'Darwin|iOS' toolchains/llvm-project/llvm/cmake/modules/AddLLVM.cmake | head
+          # The same for -Wl,-z,defs on shared libraries (libLTO.dylib): Xcode 27's ld refuses "-z" (build 672, the M5 Max);
+          # older Xcode ignored it. Static libraries, the ones DXMT links, are not affected.
+          sed -i '' 's/CMAKE_SYSTEM_NAME MATCHES "Darwin|FreeBSD|OpenBSD|DragonFly|AIX|SunOS|OS390"/CMAKE_SYSTEM_NAME MATCHES "Darwin|iOS|FreeBSD|OpenBSD|DragonFly|AIX|SunOS|OS390"/' \
+            toolchains/llvm-project/llvm/cmake/modules/HandleLLVMOptions.cmake
+          grep -n 'Darwin|iOS|FreeBSD' toolchains/llvm-project/llvm/cmake/modules/HandleLLVMOptions.cmake | head
 
           # stage 1: host llvm-tblgen only (use Xcode clang, not brew's newer one)
           cmake -S toolchains/llvm-project/llvm -B toolchains/llvm-host-build -G Ninja \
@@ -1488,6 +1549,9 @@ jobs:
       # ([swapchain-rotation]). Same two DLLs as above.
       - name: Patch DXMT swap chain rotation
         run: python3 tools/patch-dxmt-d11-swapchain-rotation.py
+
+      - name: Patch DXMT opt-in x64 swapchain entries
+        run: python3 tools/patch-dxmt-x64-swapchain-entry.py
 
       # The Witness, Rise/Shadow of the Tomb Raider, Transformers, Danganronpa (night round 2026-11-11, G10 S9): a texture over Direct3D 11's
       # limits (16384 / 2048 slices; 3D 2048) reached Metal, whose validation aborts the process; it gets E_INVALIDARG as on Windows
@@ -1839,6 +1903,16 @@ jobs:
       # first compare an unpatched ntdll with the committed one byte for byte. The 64-bit ntdll gets it through tools/build-wine-fresh-dlls.sh.
       - name: Patch wine with the loader's import diagnostics (i386 farm only)
         run: python3 tools/patch-wine-loader-import-diag.py wine
+      # round 669 (agent B S7; Doki Doki Literature Club N8E7GN): [import-miss] says what was searched for an import that was not found (log only, 8 a
+      # process); env.MADEIRA_IMPORT_APPDIR = 1 (default off) searches the program's own folder once more. Same file, put back with it.
+      - name: Patch wine with the loader's missing-import line and the keyed application-folder search (i386 farm only)
+        run: python3 tools/patch-wine-loader-import-appdir.py wine
+      # round 669 (agent D S4; The Wolf Among Us 4VHH72): a program's DirectInput callbacks are called through Wine's enum_callback_wrapper, so a cdecl
+      # callback (Telltale's 32-bit games) cannot unbalance the stack of Wine's ANSI shims. Same machine code for a stdcall callback; i386 farm only,
+      # put back with the other farm-only files.
+      - name: Patch wine so DirectInput's callbacks to the program restore the stack (i386 farm only)
+        run: |
+          python3 tools/patch-wine-dinput-cdecl-callbacks.py wine
 
       # WoW64's 32-bit Windows farm (app/Madeira/i386-windows), which upstream
       # builds from the pinned wine and DXMT (build/wine-i386) and does not
@@ -1883,6 +1957,8 @@ jobs:
           git -C wine checkout -- dlls/ntdll/env.c dlls/kernelbase/process.c dlls/ntdll/exception.c dlls/kernelbase/debug.c dlls/msvcrt/main.c
           git -C wine checkout -- dlls/ntdll/heap.c
           git -C wine checkout -- dlls/ntdll/loader.c
+          git -C wine checkout -- dlls/dinput   # round 669: tools/patch-wine-dinput-cdecl-callbacks.py
+          git -C wine checkout -- dlls/kernelbase/file.c   # build 666: the overlapped poll (i386 farm here; arm64ec only in kernelbase-optin.dll)
 
       # madeira-bcd: DXMT's Direct3D 9 frontend compiled for arm64ec (tools/build-d3d9-x64-dll.sh), shipped as
       # arm64ec-windows/d3d9-dxmt.dll NEXT TO Wine's d3d9.dll, which stays the default: a 64-bit game gets it as its d3d9.dll only
@@ -2262,6 +2338,8 @@ jobs:
               raise SystemExit('Required ARM64EC EC-bitmap cache module was not built; refusing the fallback IPA')
           if b'ec-exit-lean-v1 madeira-bcd' not in module:
               raise SystemExit('Required ARM64EC lean JIT exit module was not built; refusing the fallback IPA')
+          if b'ec-exit-pool-v1 madeira-bcd' not in module:
+              raise SystemExit('Required ARM64EC pool-target exit hint module was not built; refusing the fallback IPA')
           if b'ec-ret-direct-v1 madeira-bcd' not in module:
               raise SystemExit('Required ARM64EC direct return module was not built; refusing the fallback IPA')
           if b'callret-small-v1 madeira-bcd' not in module:
@@ -2270,6 +2348,10 @@ jobs:
           PYEOF
           # Verify the linked x64 entries; never silently ship a fallback DLL
           # that accepts the option but lacks the required interop ABI.
+          D3D11_CHECK=app/Madeira/arm64ec-windows/d3d11.dll
+          if [ -f app/Madeira/arm64ec-windows/d3d11-src.dll ]; then
+            D3D11_CHECK=app/Madeira/arm64ec-windows/d3d11-src.dll
+          fi
           # Likewise tools/build-d3d11-dll.sh (env.MADEIRA_D3D11_SRC). Round 620: BCD's Direct3D 11
           # patches reach a 64-bit game only through d3d11-src.dll, and recommended lists ask for it
           # (F1 2020), so an IPA in which no 64-bit d3d11.dll carries them is refused.
@@ -2413,8 +2495,9 @@ jobs:
           command -v cabextract >/dev/null 2>&1 || brew install cabextract
           command -v msiextract >/dev/null 2>&1 || brew install msitools
 
-          curl -fL --retry 3 --retry-delay 2 -o /tmp/vcr.exe \
-            https://aka.ms/vs/17/release/vc_redist.x64.exe
+          # tools/fetch-cached.sh: the plain curl call here; on the owner's Mac (BCD_DOWNLOAD_CACHE) only when Microsoft's copy changed
+          bash tools/fetch-cached.sh /tmp/vcr.exe https://aka.ms/vs/17/release/vc_redist.x64.exe \
+            -fL --retry 3 --retry-delay 2
           if [ ! -s /tmp/vcr.exe ]; then
             echo "::warning::VC_redist.x64.exe download failed -- MSVC games will not start"
             exit 0
