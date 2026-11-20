@@ -3038,7 +3038,7 @@ index 0000000..40be843
 +static const char pso_probe_vs_function[] = "vs_3139aeb0_965bb8141ddd906555208b8fbc69868894972b54";
 +static const char pso_probe_ps_function[] = "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c";
 diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
-index 3c4a483..e72001b 100644
+index 3c4a483..1a1e88e 100644
 --- a/src/winemetal/unix/winemetal_unix.c
 +++ b/src/winemetal/unix/winemetal_unix.c
 @@ -2024,6 +2024,160 @@ MTLMeshRenderPipelineDescriptor ()
@@ -3202,21 +3202,21 @@ index 3c4a483..e72001b 100644
  static NTSTATUS
  _MTLDevice_newRenderPipelineState(void *obj) {
    struct unixcall_mtldevice_newrenderpso *params = obj;
-@@ -2113,6 +2267,8 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+@@ -2112,6 +2266,8 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+     if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 0);
    }
    [madeira_arch release];
-   params->ret_error = (obj_handle_t)err;
 +  if (err && !params->ret_pso)   /* Madeira iOS 16: [pso-probe] */
 +    wmt_pso_probe((id<MTLDevice>)params->device, descriptor);
+   params->ret_error = (obj_handle_t)err;
    if (!err && info->binary_archive_for_serialization) {
      [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addRenderPipelineFunctionsWithDescriptor:descriptor
-                                                                                                      error:&err];
-@@ -2232,6 +2388,8 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
+@@ -2231,6 +2387,8 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
+     if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 0);
    }
    [madeira_arch release];
-   params->ret_error = (obj_handle_t)err;
 +  if (err && !params->ret_pso)   /* Madeira iOS 16: [pso-probe] */
 +    wmt_pso_probe((id<MTLDevice>)params->device, descriptor);
+   params->ret_error = (obj_handle_t)err;
    if (!err && info->binary_archive_for_serialization) {
      [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addRenderPipelineFunctionsWithDescriptor:descriptor
-                                                                                                      error:&err];
