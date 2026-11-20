@@ -3038,10 +3038,18 @@ index 0000000..40be843
 +static const char pso_probe_vs_function[] = "vs_3139aeb0_965bb8141ddd906555208b8fbc69868894972b54";
 +static const char pso_probe_ps_function[] = "ps_a1f3d64f_31a207210d1259031de67effcdc341adf046517c";
 diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
-index 3c4a483..1a1e88e 100644
+index 3c4a483..f38585d 100644
 --- a/src/winemetal/unix/winemetal_unix.c
 +++ b/src/winemetal/unix/winemetal_unix.c
-@@ -2024,6 +2024,160 @@ MTLMeshRenderPipelineDescriptor ()
+@@ -330,6 +330,7 @@ _MTLCopyAllDevices(void *obj) {
+ #include <os/proc.h>
+ #include <mach/mach.h>
+ #include <sys/sysctl.h>
++#include <unistd.h>
+ /* The process limit above can be larger than the device's RAM: an iPad with
+  * 7644 MB of RAM measured 8192 MB, so nothing here ever saw a shortage and God
+  * of War sat at an 8175 MB footprint with 4.4 GB compressed, drawing black
+@@ -2024,6 +2025,177 @@ MTLMeshRenderPipelineDescriptor ()
  
  #endif
  
@@ -3059,6 +3067,7 @@ index 3c4a483..1a1e88e 100644
 +#include "pso_probe_data.h"
 +#include <dispatch/dispatch.h>
 +#include <sys/sysctl.h>
++#include <unistd.h>
 +#include <time.h>
 +
 +static int
@@ -3121,15 +3130,30 @@ index 3c4a483..1a1e88e 100644
 +  return major > 0 && major < 17;
 +}
 +
++/* The game's own compiles share the one AGX compiler service with the probe;
++ * on iOS 16.2 each of its failing pipelines takes 15-25 s, so the probe took
++ * 90 s for its first MSL library and never finished. While the probe runs,
++ * new game compiles wait here (at most 5 min); they fail anyway. */
++static atomic_int wmt_pso_probe_busy;
++
++static void
++wmt_pso_probe_gate(void) {
++  if (!atomic_load(&wmt_pso_probe_busy))
++    return;
++  for (int i = 0; i < 3000 && atomic_load(&wmt_pso_probe_busy); i++)
++    usleep(100000);
++}
++
 +static void
 +wmt_pso_probe(id<MTLDevice> device, MTLRenderPipelineDescriptor *failed) {
 +  static atomic_int done;
 +  if (atomic_fetch_add(&done, 1) || !device || !wmt_pso_probe_wanted())
 +    return;
++  atomic_store(&wmt_pso_probe_busy, 1);
 +  MTLPixelFormat fmt = failed.colorAttachments[0].pixelFormat;
 +  if (fmt == MTLPixelFormatInvalid)
 +    fmt = MTLPixelFormatBGRA8Unorm;
-+  fprintf(stderr, "[pso-probe] begin (background, a failing compile can take ~30 s; wait for [pso-probe] end): "
++  fprintf(stderr, "[pso-probe] begin (background, a failing compile can take ~30 s; game shader compiles wait for it; keep the app open until [pso-probe] end): "
 +                  "vs=%s fs=%s rt0=%lu\n",
 +          failed.vertexFunction ? [failed.vertexFunction.name UTF8String] : "-",
 +          failed.fragmentFunction ? [failed.fragmentFunction.name UTF8String] : "-", (unsigned long)fmt);
@@ -3194,6 +3218,7 @@ index 3c4a483..1a1e88e 100644
 +      [basic release]; [blit release];
 +      [failed_vs release]; [failed_fs release];
 +      [device release];
++      atomic_store(&wmt_pso_probe_busy, 0);
 +      fprintf(stderr, "[pso-probe] end\n");
 +    }
 +  });
@@ -3202,7 +3227,15 @@ index 3c4a483..1a1e88e 100644
  static NTSTATUS
  _MTLDevice_newRenderPipelineState(void *obj) {
    struct unixcall_mtldevice_newrenderpso *params = obj;
-@@ -2112,6 +2266,8 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+@@ -2085,6 +2257,7 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+   if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
+     descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
+                                                     count:info->num_binary_archives_for_lookup];
++  wmt_pso_probe_gate();   /* Madeira iOS 16: [pso-probe] */
+   NSError *err = NULL;
+   MTLPipelineOption options =
+       info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
+@@ -2112,6 +2285,8 @@ _MTLDevice_newRenderPipelineState(void *obj) {
      if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 0);
    }
    [madeira_arch release];
@@ -3211,7 +3244,15 @@ index 3c4a483..1a1e88e 100644
    params->ret_error = (obj_handle_t)err;
    if (!err && info->binary_archive_for_serialization) {
      [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addRenderPipelineFunctionsWithDescriptor:descriptor
-@@ -2231,6 +2387,8 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
+@@ -2204,6 +2379,7 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
+   if (info->num_binary_archives_for_lookup && info->binary_archives_for_lookup.ptr)
+     descriptor.binaryArchives = [NSArray arrayWithObjects:(id<MTLBinaryArchive> *)info->binary_archives_for_lookup.ptr
+                                                     count:info->num_binary_archives_for_lookup];
++  wmt_pso_probe_gate();   /* Madeira iOS 16: [pso-probe] */
+   NSError *err = NULL;
+   MTLPipelineOption options =
+       info->fail_on_binary_archive_miss ? MTLPipelineOptionFailOnBinaryArchiveMiss : MTLPipelineOptionNone;
+@@ -2231,6 +2407,8 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
      if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 0);
    }
    [madeira_arch release];
