@@ -162,34 +162,125 @@ PK = '<{ <4 x float>, <4 x float> }>'
 RET = ('  ret %s <{ <4 x float> <float 0.0, float 0.0, float 0.0, float 1.0>, <4 x float> zeroinitializer }>\n' % PK)
 bare = re.sub(r'declare <2 x float> @air\.fma.*\n', '', body(vs, RET))
 
+
+# ---- round 2: the encoding and metadata are cleared (skel/bare pass, orig fails
+# with Apple's metadata too), so bisect the body. Each variant keeps one feature.
+def renum(t):
+    """Name unnamed values >= first so cut-down bodies need no renumbering."""
+    s = t.index('define '); e = t.index('\n}\n', s)
+    f = re.sub(r'%(\d+)\b', lambda m: '%' + m.group(1) if int(m.group(1)) < NARGS[0] else '%v' + m.group(1), t[s:e])
+    return t[:s] + f + t[e:]
+
+
+def ret_vs(pos, tc):
+    return ('  %%r0 = insertvalue %s zeroinitializer, <4 x float> %s, 0\n'
+            '  %%r1 = insertvalue %s %%r0, <4 x float> %s, 1\n  ret %s %%r1\n' % (PK, pos, PK, tc, PK))
+
+
+ONE = '<float 0.0, float 0.0, float 0.0, float 1.0>'
+NOFMA = re.compile(r'declare <2 x float> @air\.fma.*\n')
+def vsb(code, pos=ONE, tc='zeroinitializer'):
+    return NOFMA.sub('', body(vs, code + ret_vs(pos, tc)))
+
+def f4(v, ty):
+    """<4 x float> from an i64/float/ptr value, as code + result name."""
+    if ty == 'i64':
+        return ('  %%c0 = trunc i64 %s to i32\n  %%c1 = bitcast i32 %%c0 to float\n'
+                '  %%c2 = insertelement <4 x float> zeroinitializer, float %%c1, i64 0\n' % v, '%c2')
+    if ty == 'float':
+        return ('  %%c2 = insertelement <4 x float> zeroinitializer, float %s, i64 0\n' % v, '%c2')
+    c, r = f4('%c9', 'i64')
+    return ('  %%c9 = ptrtoint %s %s to i64\n' % (ty, v)) + c, r
+
+AB_CB = ('  %a0 = getelementptr inbounds %argument_buffer_struct, %argument_buffer_struct addrspace(2)* %5, i64 0, i32 0\n'
+         '  %a1 = load <4 x i32> addrspace(2)*, <4 x i32> addrspace(2)* addrspace(2)* %a0, align 8\n')
+VB = ('  %p0 = bitcast i32 addrspace(2)* %0 to i8 addrspace(1)* addrspace(2)*\n'
+      '  %p1 = load i8 addrspace(1)*, i8 addrspace(1)* addrspace(2)* %p0, align 8\n'
+      '  %p2 = mul i32 %1, 20\n  %p3 = sext i32 %p2 to i64\n'
+      '  %p4 = getelementptr i8, i8 addrspace(1)* %p1, i64 %p3\n')
+
+c, r = f4('%a1', '<4 x i32> addrspace(2)*')
+vs_ab_ptr = vsb(AB_CB + c, tc=r)
+vs_ab_cb = vsb(AB_CB + '  %a2 = load <4 x i32>, <4 x i32> addrspace(2)* %a1, align 16\n'
+               '  %a3 = bitcast <4 x i32> %a2 to <4 x float>\n', tc='%a3')
+c, r = f4('%p1', 'i8 addrspace(1)*')
+vs_vb_ptr = vsb(VB + c, tc=r)
+vs_vb_f1 = vsb(VB + '  %p5 = bitcast i8 addrspace(1)* %p4 to float addrspace(1)*\n'
+               '  %p6 = load float, float addrspace(1)* %p5, align 4\n' + f4('%p6', 'float')[0], tc='%c2')
+vs_vb_f3 = vsb(VB + '  %p5 = bitcast i8 addrspace(1)* %p4 to <3 x float> addrspace(1)*\n'
+               '  %p6 = load <3 x float>, <3 x float> addrspace(1)* %p5, align 4\n'
+               '  %p7 = shufflevector <3 x float> %p6, <3 x float> undef, <4 x i32> <i32 0, i32 1, i32 2, i32 undef>\n', tc='%p7')
+vs_vb_f4 = vsb(VB + '  %p5 = bitcast i8 addrspace(1)* %p4 to <4 x float> addrspace(1)*\n'
+               '  %p6 = load <4 x float>, <4 x float> addrspace(1)* %p5, align 4\n', tc='%p6')
+vs_math = body(vs, '  %m0 = uitofp i32 %1 to float\n  %m1 = insertelement <2 x float> zeroinitializer, float %m0, i64 0\n'
+               '  %m2 = call <2 x float> @air.fma.v2f32(<2 x float> %m1, <2 x float> <float 2.0, float 2.0>, <2 x float> <float -1.0, float -1.0>)\n'
+               '  %m3 = shufflevector <2 x float> %m2, <2 x float> undef, <4 x i32> <i32 0, i32 1, i32 undef, i32 undef>\n'
+               '  %m4 = bitcast <4 x float> %m3 to <4 x i32>\n'
+               '  %m5 = and <4 x i32> %m4, <i32 2139095040, i32 2139095040, i32 2139095040, i32 2139095040>\n'
+               '  %m6 = icmp ne <4 x i32> %m5, <i32 2139095040, i32 2139095040, i32 2139095040, i32 2139095040>\n'
+               '  %m7 = extractelement <4 x i1> %m6, i64 0\n'
+               '  %m8 = select i1 %m7, <4 x float> %m3, <4 x float> zeroinitializer\n' + ret_vs('%m8', '%m3'))
+NARGS = [6]
+i0 = vs.index('entry:\n') + len('entry:\n'); i1 = vs.index('\n', vs.index('\nentrybb:') + 1) + 1
+vs_nopull = renum(vs[:i0] + '  %20 = add <4 x i32> zeroinitializer, zeroinitializer\n'
+                  + re.sub(r'  %35 = phi .*', '  %35 = add <4 x i32> zeroinitializer, zeroinitializer', vs[i1:]))
+vs_nosel = re.sub(r'select i1 (%\w+), i1 true, i1 (%\w+)', r'or i1 \1, \2', vs)
+assert vs_nosel != vs
+
+# PS
+def psb(code, col):
+    return re.sub(r'declare \{ <4 x float>, i8 \} @air\.sample.*\n', '', body(ps,
+        code + '  %%r0 = insertvalue <{ <4 x float> }> zeroinitializer, <4 x float> %s, 0\n  ret <{ <4 x float> }> %%r0\n' % col))
+ABF = lambda i: '  %%g%d = getelementptr inbounds %%argument_buffer_struct, %%argument_buffer_struct addrspace(2)* %%1, i64 0, i32 %d\n' % (i, i)
+ps_bare = psb('', '<float 1.0, float 0.0, float 1.0, float 1.0>')
+c, r = f4('%l4', 'i64')
+ps_ab_meta = psb(ABF(4) + '  %l4 = load i64, i64 addrspace(2)* %g4, align 8\n' + c, r)
+ps_ab_tex = psb(ABF(3) + '  %l3 = load %struct._texture_2d_t addrspace(1)*, %struct._texture_2d_t addrspace(1)* addrspace(2)* %g3, align 8\n'
+                + f4('%l3', '%struct._texture_2d_t addrspace(1)*')[0], '%c2')
+ps_lod0 = re.sub(r'i1 false, float %\d+, float %\d+, i32 0\)', 'i1 false, float 0.0, float 0.0, i32 0)', ps)
+assert ps_lod0 != ps
+# direct texture + sampler arguments, like Apple's fs_blit_quad (no argument buffer)
+fn_line = re.search(r'define .*\n', ps).group(0)
+ps_direct = ps.replace(fn_line, fn_line.replace('%argument_buffer_struct addrspace(2)* %1',
+            '%struct._texture_2d_t addrspace(1)* %1, %struct._sampler_t addrspace(2)* %2'))
+ps_direct = body(ps_direct,
+    '  %s0 = bitcast <4 x float> %0 to <4 x i32>\n'
+    '  %s1 = shufflevector <4 x float> %0, <4 x float> undef, <2 x i32> <i32 0, i32 1>\n'
+    '  %s2 = call { <4 x float>, i8 } @air.sample_texture_2d.v4f32(%struct._texture_2d_t addrspace(1)* %1, %struct._sampler_t addrspace(2)* %2, <2 x float> %s1, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)\n'
+    '  %s3 = extractvalue { <4 x float>, i8 } %s2, 0\n'
+    '  %r0 = insertvalue <{ <4 x float> }> zeroinitializer, <4 x float> %s3, 0\n  ret <{ <4 x float> }> %r0\n')
+ps_direct = ps_direct.replace('(<4 x float>, %argument_buffer_struct addrspace(2)*)*',
+                              '(<4 x float>, %struct._texture_2d_t addrspace(1)*, %struct._sampler_t addrspace(2)*)*')
+ps_direct = re.sub(r'!11 = .*', '!11 = !{!12, !30, !31}', ps_direct)
+ps_direct = re.sub(r'!1[3-9] = .*\n', '', ps_direct)
+ps_direct += ('!30 = !{i32 1, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"texture2d<float, sample>", !"air.arg_name", !"t0"}\n'
+              '!31 = !{i32 2, !"air.sampler", !"air.location_index", i32 0, i32 1, !"air.arg_type_name", !"sampler", !"air.arg_name", !"s0"}\n')
+ps_direct = ps_direct.replace('%argument_buffer_struct = type { %struct._sampler_t addrspace(2)*, %struct._sampler_t addrspace(2)*, i64, %struct._texture_2d_t addrspace(1)*, i64 }\n', '')
+# lod 0 plus Apple's spelling of the texture type name
+ps_ab_min = ps_lod0.replace('!"texture2d<float,sample>"', '!"texture2d<float, sample>"')
+
 # (name, vertex (lib, fn) or None for the MSL v_tc, fragment (lib, fn) or None)
-# Ordered by what they decide: first whether Apple's own bitcode passes in our
-# container (control), then whether LLVM 15/14's writer breaks it, then
-# Apple's module metadata on airconv's shaders.
 tests = [
-    ('apple VS raw',            AV(a_vs_bc), None),
     ('apple VS+FS raw',         AV(a_vs_bc), AF(a_fs_bc)),
-    ('apple VS llvm15',         AV(asm(a_vs, 'a_vs_15')), None),
-    ('apple VS llvm14',         AV(asm(a_vs, 'a_vs_14', 14)), None),
-    ('apple VS+FS llvm15',      AV(asm(a_vs, 'a_vs_15')), AF(asm(a_fs, 'a_fs_15'))),
-    ('skel',                    V(asm(skel, 'skel')), None),
-    ('skel llvm14',             V(asm(skel, 'skel_14', 14)), None),
-    ('skel +meta',              V(asm(meta(skel), 'skel_meta')), None),
-    ('skel +ident',             V(asm(add_ident(skel), 'skel_ident')), None),
-    ('skel +opts',              V(asm(add_opts(skel), 'skel_opts')), None),
-    ('skel +attrs',             V(asm(add_attrs(skel), 'skel_attrs')), None),
-    ('skel sdk27.3',            V(asm(sdk(skel, 27, 3), 'skel_sdk')), None),
-    ('skel plain-triple',       V(asm(skel.replace('air64_v25-', 'air64-'), 'skel_tri')), None),
-    ('VS orig +meta',           V(asm(meta(vs), 'vs_meta')), None),
-    ('VS orig +meta sdk27.3',   V(asm(sdk(meta(vs), 27, 3), 'vs_meta_sdk')), None),
-    ('VS orig llvm15',          V(asm(vs, 'vs_15')), None),
-    ('VS orig llvm14',          V(asm(vs, 'vs_14', 14)), None),
     ('VS bare',                 V(asm(bare, 'vs_bare')), None),
+    ('VS math (fma,isfinite)',  V(asm(vs_math, 'vs_math')), None),
+    ('VS ab cb-ptr only',       V(asm(vs_ab_ptr, 'vs_ab_ptr')), None),
+    ('VS ab cb load',           V(asm(vs_ab_cb, 'vs_ab_cb')), None),
+    ('VS vb ptr only',          V(asm(vs_vb_ptr, 'vs_vb_ptr')), None),
+    ('VS vb float',             V(asm(vs_vb_f1, 'vs_vb_f1')), None),
+    ('VS vb float3',            V(asm(vs_vb_f3, 'vs_vb_f3')), None),
+    ('VS vb float4',            V(asm(vs_vb_f4, 'vs_vb_f4')), None),
+    ('VS orig no-pull',         V(asm(vs_nopull, 'vs_nopull')), None),
+    ('VS orig or-not-select',   V(asm(vs_nosel, 'vs_nosel')), None),
+    ('PS bare',                 None, P(asm(ps_bare, 'ps_bare'))),
+    ('PS ab ulong',             None, P(asm(ps_ab_meta, 'ps_ab_meta'))),
+    ('PS ab tex ptr',           None, P(asm(ps_ab_tex, 'ps_ab_tex'))),
+    ('PS orig lod 0',           None, P(asm(ps_lod0, 'ps_lod0'))),
+    ('PS orig "float, sample"', None, P(asm(ps_ab_min, 'ps_ab_min'))),
+    ('PS direct tex+smp',       None, P(asm(ps_direct, 'ps_direct'))),
+    ('PS direct tex+smp +meta', None, P(asm(meta(ps_direct), 'ps_direct_meta'))),
     ('VS orig',                 (vs_ml['raw'], vs_fn), None),
-    ('PS orig +meta',           None, P(asm(meta(ps), 'ps_meta'))),
-    ('PS orig llvm15',          None, P(asm(ps, 'ps_15'))),
     ('PS orig',                 None, (ps_ml['raw'], ps_fn)),
-    ('VS+PS orig +meta',        V(asm(meta(vs), 'vs_meta')), P(asm(meta(ps), 'ps_meta'))),
 ]
 
 blobs = {}
