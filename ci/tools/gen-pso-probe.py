@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Build the iOS 16 PSO probe variants from People Playground's failing blit
-shaders (vs_3139aeb0 / ps_a1f3d64f) and write pso_probe_data.h.
+"""Build the iOS 16 PSO probe tests and write pso_probe_data.h.
 
-usage: gen_probe.py <vs.metallib> <ps.metallib> <workdir> <out.h>
-Each variant changes one thing; the probe compiles each on the device."""
-import hashlib, os, re, struct, subprocess, sys
+usage: gen-pso-probe.py <ref dir> <workdir> <out.h>
 
-vs_ml, ps_ml, work, out_h = sys.argv[1:5]
+<ref dir> (ci/tools/pso-probe-ref) holds People Playground's failing blit
+shaders as airconv wrote them (vs_3139aeb0..., ps_a1f3d64f... .metallib) and
+the raw bitcode of DXMT's own vs_blit_quad / fs_blit_quad as Apple's metal
+toolchain built them for iOS 16 (carved from d3d11-src.dll's internal
+library, which does compile on the device). Every test is built into a
+single-function library by the same container writer, so the only thing that
+differs between two tests is the bitcode."""
+import glob, hashlib, os, re, struct, subprocess, sys
+
+ref, work, out_h = sys.argv[1:4]
 os.makedirs(work, exist_ok=True)
 
 
@@ -14,36 +20,45 @@ def run(*a):
     subprocess.run(a, check=True)
 
 
-def blob_of(ml):
-    d = open(ml, 'rb').read()
-    off, sz = struct.unpack('<QQ', d[0x48:0x58])
-    return d, d[off:off + sz]
+def unwrap(bc):
+    """Raw bitcode without a Darwin wrapper (llvm-as adds one for apple triples)."""
+    if bc[:4] == b'\xde\xc0\x17\x0b':
+        o, s = struct.unpack('<II', bc[8:16])
+        return bc[o:o + s]
+    assert bc[:4] == b'BC\xc0\xde', bc[:4]
+    return bc
 
 
-def raw_bc(blob):
-    o, s = struct.unpack('<II', blob[8:16])
-    return blob[o:o + s]
+def read_metallib(path):
+    d = open(path, 'rb').read()
+    fl_off = struct.unpack('<Q', d[0x18:0x20])[0]
+    po, ps, vo, vs, bo, bs = struct.unpack('<QQQQQQ', d[0x28:0x58])
+    q = fl_off + 8
+    tags = {}
+    while d[q:q + 4] != b'ENDT':
+        t = bytes(d[q:q + 4]); l = struct.unpack('<H', d[q + 4:q + 6])[0]
+        tags[t] = d[q + 6:q + 6 + l]; q += 6 + l
+    return dict(hdr=d[:0x10], pub=d[po:po + ps], priv=d[vo:vo + vs], tags=tags,
+                bc=unwrap(d[bo:bo + bs]), raw=d)
 
 
-def metallib(template, bc, major=None, minor=None, os_byte=None):
-    """Template's container with its bitcode replaced (same function name)."""
-    d = bytearray(template)
-    fl_off, fl_sz = struct.unpack('<QQ', d[0x18:0x28])
-    bc_off = struct.unpack('<Q', d[0x48:0x50])[0]
+def metallib(tmpl, name, ftype, bc):
+    """One-function library, laid out as airconv's metallib_writer does."""
     blob = struct.pack('<IIIII', 0x0B17C0DE, 0, 20, len(bc), 0xFFFFFFFF) + bc
     blob += b'\0' * (-len(blob) % 16)
-    q = fl_off + 8
-    while d[q:q + 4] != b'ENDT':
-        t = bytes(d[q:q + 4]); l = struct.unpack('<H', d[q + 4:q + 6])[0]; v = q + 6
-        if t == b'HASH': d[v:v + 32] = hashlib.sha256(blob).digest()
-        if t == b'MDSZ': d[v:v + 8] = struct.pack('<Q', len(blob))
-        q = v + l
-    d = d[:bc_off] + blob
-    struct.pack_into('<Q', d, 0x10, len(d))
-    struct.pack_into('<Q', d, 0x50, len(blob))
-    if major is not None: struct.pack_into('<HH', d, 6, major, minor)
-    if os_byte is not None: d[11] = os_byte
-    return bytes(d)
+    def tag(t, v):
+        return t + struct.pack('<H', len(v)) + v
+    fdef = (tag(b'NAME', name.encode() + b'\0') + tag(b'TYPE', bytes([ftype])) +
+            tag(b'HASH', hashlib.sha256(blob).digest()) + tag(b'MDSZ', struct.pack('<Q', len(blob))) +
+            tag(b'OFFT', bytes(24)) + tag(b'VERS', tmpl['tags'][b'VERS']) + b'ENDT')
+    fl_sz = 4 + len(fdef)
+    pub_off = 0x58 + fl_sz + 4 + 4
+    priv_off = pub_off + len(tmpl['pub'])
+    bc_off = priv_off + len(tmpl['priv'])
+    size = bc_off + len(blob)
+    hdr = tmpl['hdr'][:0x10] + struct.pack('<QQQQQQQQQ', size, 0x58, fl_sz, pub_off, len(tmpl['pub']),
+                                           priv_off, len(tmpl['priv']), bc_off, len(blob))
+    return (hdr + struct.pack('<II', 1, fl_sz) + fdef + b'ENDT' + tmpl['pub'] + tmpl['priv'] + blob)
 
 
 def dis(bc, name):
@@ -57,66 +72,83 @@ def asm(text, name, ver=15):
     p = os.path.join(work, name)
     open(p + '.ll', 'w').write(text)
     run('llvm-as-%d' % ver, p + '.ll', '-o', p + '.bc')
-    return open(p + '.bc', 'rb').read()
+    return unwrap(open(p + '.bc', 'rb').read())
 
 
-vs_tmpl, vs_blob = blob_of(vs_ml)
-ps_tmpl, ps_blob = blob_of(ps_ml)
-vs = dis(raw_bc(vs_blob), 'vs_orig')
-ps = dis(raw_bc(ps_blob), 'ps_orig')
-vs_fn = re.search(r'define [^@]*@(\w+)', vs).group(1)
-ps_fn = re.search(r'define [^@]*@(\w+)', ps).group(1)
-
-
-def sub(text, old, new, count=1):
+def sub(text, old, new):
     assert old in text, old
-    return text.replace(old, new) if count == 0 else text.replace(old, new, count)
-
-
-def nofma(t):
-    def rep(m):
-        a, b, c = m.group(2).split(', <2 x float> ')
-        a = a.replace('<2 x float> ', '', 1)
-        tmp = '%fmam' + m.group(1)[1:]
-        return '%s = fmul <2 x float> %s, %s\n  %s = fadd <2 x float> %s, %s' % (
-            tmp, a, b, m.group(1), tmp, c)
-    t2 = re.sub(r'(%\w+) = call <2 x float> @air\.fma\.v2f32\((.*)\)', rep, t)
-    assert t2 != t
-    return t2
+    return text.replace(old, new, 1)
 
 
 def body(t, new_body):
-    """Replace the function body of the only defined function."""
     s = t.index('\n', t.index('define ')) - 1
     assert t[s] == '{'
     e = t.index('\n}\n', s)
     return t[:s + 1] + '\nentry:\n' + new_body + t[e:]
 
 
-PK = '<{ <4 x float>, <4 x float> }>'
-NP = '{ <4 x float>, <4 x float> }'
-vs_variants = []   # (name, metallib bytes)
-vs_variants.append(('orig', open(vs_ml, 'rb').read()))
-vs_variants.append(('reas', metallib(vs_tmpl, asm(vs, 'vs_reas'))))
-vs_variants.append(('llvm14', metallib(vs_tmpl, asm(vs, 'vs_l14', 14))))
-vs_variants.append(('nopack', metallib(vs_tmpl, asm(vs.replace(PK, NP), 'vs_nopack'))))
-vs_variants.append(('noflags', metallib(vs_tmpl, asm(re.sub(r'!llvm\.module\.flags = .*\n', '', vs), 'vs_noflags'))))
-t = sub(vs, 'br i1 %11, label %19, label %12', 'br i1 true, label %19, label %12')
-t = sub(t, 'br i1 %27, label %entrybb, label %28', 'br i1 true, label %entrybb, label %28')
-vs_variants.append(('nopull', metallib(vs_tmpl, asm(t, 'vs_nopull'))))
-t = re.sub(r'%43 = getelementptr .*', '%43 = add i32 0, 0', vs)
-t = re.sub(r'%44 = load .*', '%44 = add i32 0, 0', t)
-t = re.sub(r'%45 = load .*', '%45 = bitcast <4 x float> <float 1.0, float 1.0, float 0.0, float 0.0> to <4 x i32>', t)
-vs_variants.append(('noab', metallib(vs_tmpl, asm(t, 'vs_noab'))))
-vs_variants.append(('nofma', metallib(vs_tmpl, asm(nofma(vs), 'vs_nofma'))))
-t = re.sub(r'%62 = select .*', '%62 = fadd <4 x float> %.sroa.01.12.vec.insert, zeroinitializer', vs)
-vs_variants.append(('nosel', metallib(vs_tmpl, asm(t, 'vs_nosel'))))
-RET = ('  ret %s <{ <4 x float> <float 0.0, float 0.0, float 0.0, float 1.0>, <4 x float> zeroinitializer }>\n' % PK)
-bare = body(vs, RET)
-bare = re.sub(r'declare <2 x float> @air\.fma.*\n', '', bare)
-vs_variants.append(('bare', metallib(vs_tmpl, asm(bare, 'vs_bare'))))
+ATTRS = ('nounwind "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" '
+         '"no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" '
+         '"no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true"')
 
-# The skeleton: no arguments, one position output, airconv's module header.
+
+def add_ident(t):
+    return t + ('\n!llvm.ident = !{!900}\n'
+                '!900 = !{!"Apple metal version 32023.925 (metalfe-32023.925.6)"}\n')
+
+
+def add_opts(t):
+    return t + ('\n!air.compile_options = !{!901, !902, !903}\n!901 = !{!"air.compile.denorms_disable"}\n'
+                '!902 = !{!"air.compile.fast_math_enable"}\n!903 = !{!"air.compile.framebuffer_fetch_enable"}\n')
+
+
+def add_attrs(t):
+    t = re.sub(r'^(define [^\n]*?) \{$', r'\1 #90 {', t, count=1, flags=re.M)
+    t = sub(t, '\ndefine ', '\n@llvm.global_ctors = appending global [0 x { i32, void ()*, i8* }] zeroinitializer\n\ndefine ')
+    return t + '\nattributes #90 = { %s }\n' % ATTRS
+
+
+def meta(t):
+    return add_attrs(add_opts(add_ident(t)))
+
+
+def sdk(t, a, b):
+    return re.sub(r'!"SDK Version", \[2 x i32\] \[i32 \d+, i32 \d+\]',
+                  '!"SDK Version", [2 x i32] [i32 %d, i32 %d]' % (a, b), t)
+
+
+vs_ml = read_metallib(glob.glob(os.path.join(ref, 'vs_*.metallib'))[0])
+ps_ml = read_metallib(glob.glob(os.path.join(ref, 'ps_*.metallib'))[0])
+vs = dis(vs_ml['bc'], 'vs_orig')
+ps = dis(ps_ml['bc'], 'ps_orig')
+vs_fn = re.search(r'define [^@]*@(\w+)', vs).group(1)
+ps_fn = re.search(r'define [^@]*@(\w+)', ps).group(1)
+# the writer must reproduce airconv's own file byte for byte
+assert metallib(vs_ml, vs_fn, 0, vs_ml['bc']) == vs_ml['raw'], 'container writer differs from airconv (vs)'
+assert metallib(ps_ml, ps_fn, 1, ps_ml['bc']) == ps_ml['raw'], 'container writer differs from airconv (ps)'
+a_vs_bc = unwrap(open(os.path.join(ref, 'apple_vs_blit_quad.bc'), 'rb').read())
+a_fs_bc = unwrap(open(os.path.join(ref, 'apple_fs_blit_quad.bc'), 'rb').read())
+a_vs = dis(a_vs_bc, 'apple_vs')
+a_fs = dis(a_fs_bc, 'apple_fs')
+
+
+def V(bc):
+    return (metallib(vs_ml, vs_fn, 0, bc), vs_fn)
+
+
+def P(bc):
+    return (metallib(ps_ml, ps_fn, 1, bc), ps_fn)
+
+
+def AV(bc):
+    return (metallib(vs_ml, 'vs_blit_quad', 0, bc), 'vs_blit_quad')
+
+
+def AF(bc):
+    return (metallib(ps_ml, 'fs_blit_quad', 1, bc), 'fs_blit_quad')
+
+
+# skeleton: no arguments, one position output, airconv's module header
 head = vs[:vs.index('%argument_buffer_struct')]
 skel = head + ('define { <4 x float> } @%s() local_unnamed_addr {\nentry:\n'
                '  ret { <4 x float> } { <4 x float> <float 0.0, float 0.0, float 0.0, float 1.0> }\n}\n\n' % vs_fn)
@@ -126,49 +158,66 @@ md = re.sub(r'!9 = .*', '!9 = !{!10}', md)
 md = re.sub(r'!12 = .*', '!12 = !{}', md)
 md = re.sub(r'!1[13-9] = .*\n|!20 = .*\n', '', md)
 skel += md
-vs_variants.append(('skel', metallib(vs_tmpl, asm(skel, 'vs_skel'))))
-vs_variants.append(('skel-llvm14', metallib(vs_tmpl, asm(skel, 'vs_skel_l14', 14))))
-vs_variants.append(('skel-triple', metallib(vs_tmpl, asm(
-    skel.replace('air64_v25-apple-ios16.0.0', 'air64-apple-ios16.0.0'), 'vs_skel_tri'))))
-vs_variants.append(('skel-v26', metallib(vs_tmpl, asm(
-    skel.replace('air64_v25-apple-ios16.0.0', 'air64_v26-apple-ios16.0.0')
-        .replace('!{i32 2, i32 5, i32 0}', '!{i32 2, i32 6, i32 0}')
-        .replace('!"Metal", i32 3, i32 0, i32 0', '!"Metal", i32 3, i32 1, i32 0'), 'vs_skel_v26'))))
-skel_bc = asm(skel, 'vs_skel')
-vs_variants.append(('skel-hdr26', metallib(vs_tmpl, skel_bc, 2, 6)))
-vs_variants.append(('skel-hdr-macos', metallib(vs_tmpl, skel_bc, os_byte=0x81)))
+PK = '<{ <4 x float>, <4 x float> }>'
+RET = ('  ret %s <{ <4 x float> <float 0.0, float 0.0, float 0.0, float 1.0>, <4 x float> zeroinitializer }>\n' % PK)
+bare = re.sub(r'declare <2 x float> @air\.fma.*\n', '', body(vs, RET))
 
-ps_variants = []
-ps_variants.append(('orig', open(ps_ml, 'rb').read()))
-ps_variants.append(('reas', metallib(ps_tmpl, asm(ps, 'ps_reas'))))
-ps_variants.append(('nopack', metallib(ps_tmpl, asm(ps.replace('<{ <4 x float> }>', '{ <4 x float> }'), 'ps_nopack'))))
-t = body(ps, '  ret <{ <4 x float> }> <{ <4 x float> <float 1.0, float 0.0, float 1.0, float 1.0> }>\n')
-t = re.sub(r'declare \{ <4 x float>, i8 \} @air\.sample.*\n', '', t)
-ps_variants.append(('bare', metallib(ps_tmpl, asm(t, 'ps_bare'))))
+# (name, vertex (lib, fn) or None for the MSL v_tc, fragment (lib, fn) or None)
+# Ordered by what they decide: first whether Apple's own bitcode passes in our
+# container (control), then whether LLVM 15/14's writer breaks it, then
+# Apple's module metadata on airconv's shaders.
+tests = [
+    ('apple VS raw',            AV(a_vs_bc), None),
+    ('apple VS+FS raw',         AV(a_vs_bc), AF(a_fs_bc)),
+    ('apple VS llvm15',         AV(asm(a_vs, 'a_vs_15')), None),
+    ('apple VS llvm14',         AV(asm(a_vs, 'a_vs_14', 14)), None),
+    ('apple VS+FS llvm15',      AV(asm(a_vs, 'a_vs_15')), AF(asm(a_fs, 'a_fs_15'))),
+    ('skel',                    V(asm(skel, 'skel')), None),
+    ('skel llvm14',             V(asm(skel, 'skel_14', 14)), None),
+    ('skel +meta',              V(asm(meta(skel), 'skel_meta')), None),
+    ('skel +ident',             V(asm(add_ident(skel), 'skel_ident')), None),
+    ('skel +opts',              V(asm(add_opts(skel), 'skel_opts')), None),
+    ('skel +attrs',             V(asm(add_attrs(skel), 'skel_attrs')), None),
+    ('skel sdk27.3',            V(asm(sdk(skel, 27, 3), 'skel_sdk')), None),
+    ('skel plain-triple',       V(asm(skel.replace('air64_v25-', 'air64-'), 'skel_tri')), None),
+    ('VS orig +meta',           V(asm(meta(vs), 'vs_meta')), None),
+    ('VS orig +meta sdk27.3',   V(asm(sdk(meta(vs), 27, 3), 'vs_meta_sdk')), None),
+    ('VS orig llvm15',          V(asm(vs, 'vs_15')), None),
+    ('VS orig llvm14',          V(asm(vs, 'vs_14', 14)), None),
+    ('VS bare',                 V(asm(bare, 'vs_bare')), None),
+    ('VS orig',                 (vs_ml['raw'], vs_fn), None),
+    ('PS orig +meta',           None, P(asm(meta(ps), 'ps_meta'))),
+    ('PS orig llvm15',          None, P(asm(ps, 'ps_15'))),
+    ('PS orig',                 None, (ps_ml['raw'], ps_fn)),
+    ('VS+PS orig +meta',        V(asm(meta(vs), 'vs_meta')), P(asm(meta(ps), 'ps_meta'))),
+]
 
-# Likely passes first, so a short session still logs the informative ones.
-ORDER = ['skel', 'skel-llvm14', 'skel-triple', 'skel-v26', 'skel-hdr26', 'skel-hdr-macos', 'bare', 'nopack',
-         'noflags', 'nopull', 'noab', 'nofma', 'nosel', 'llvm14', 'reas', 'orig']
-vs_variants.sort(key=lambda v: ORDER.index(v[0]))
-ps_variants.sort(key=lambda v: ['bare', 'nopack', 'reas', 'orig'].index(v[0]))
+blobs = {}
+def ident_of(data):
+    h = hashlib.sha1(data).hexdigest()[:12]
+    blobs.setdefault(h, data)
+    return 'pso_probe_lib_' + h
+
+
 with open(out_h, 'w') as f:
-    f.write('/* Madeira iOS 16: variants of People Playground\'s blit shaders (%s, %s),\n'
-            ' * which iOS 16.2 fails with "Compiler encountered an internal error". Each\n'
-            ' * changes one thing; built offline with LLVM 15 (14 where named) by\n'
-            ' * ci/tools/gen-pso-probe.py. Generated, do not edit. */\n\n' % (vs_fn[:11], ps_fn[:11]))
-    for kind, lst in (('vs', vs_variants), ('ps', ps_variants)):
-        for name, data in lst:
-            ident = 'pso_probe_%s_%s' % (kind, re.sub(r'\W', '_', name))
-            f.write('static const unsigned char %s[%d] = {\n' % (ident, len(data)))
-            for i in range(0, len(data), 24):
-                f.write('  ' + ','.join(str(b) for b in data[i:i + 24]) + ',\n')
-            f.write('};\n')
-        f.write('static const struct { const char *name; const unsigned char *data; unsigned size; } '
-                'pso_probe_%s[] = {\n' % kind)
-        for name, data in lst:
-            ident = 'pso_probe_%s_%s' % (kind, re.sub(r'\W', '_', name))
-            f.write('  {"%s", %s, sizeof(%s)},\n' % (name, ident, ident))
+    f.write('/* Madeira iOS 16: PSO probe tests for People Playground\'s blit shaders (%s, %s),\n'
+            ' * which iOS 16.2 fails with "Compiler encountered an internal error", next to\n'
+            ' * DXMT\'s own Apple-built vs/fs_blit_quad. Built offline by\n'
+            ' * ci/tools/gen-pso-probe.py from ci/tools/pso-probe-ref. Generated, do not edit. */\n\n'
+            % (vs_fn[:11], ps_fn[:11]))
+    rows = []
+    for name, v, p in tests:
+        rows.append((name, (ident_of(v[0]), v[1]) if v else None, (ident_of(p[0]), p[1]) if p else None))
+    for h, data in blobs.items():
+        f.write('static const unsigned char pso_probe_lib_%s[%d] = {\n' % (h, len(data)))
+        for i in range(0, len(data), 24):
+            f.write('  ' + ','.join(str(b) for b in data[i:i + 24]) + ',\n')
         f.write('};\n')
-    f.write('static const char pso_probe_vs_function[] = "%s";\n' % vs_fn)
-    f.write('static const char pso_probe_ps_function[] = "%s";\n' % ps_fn)
-print('vs:', [n for n, _ in vs_variants]); print('ps:', [n for n, _ in ps_variants])
+    f.write('static const struct {\n  const char *name;\n  const unsigned char *vs; unsigned vs_size; const char *vs_fn;\n'
+            '  const unsigned char *fs; unsigned fs_size; const char *fs_fn;\n} pso_probe_tests[] = {\n')
+    for name, v, p in rows:
+        vv = '%s, sizeof(%s), "%s"' % (v[0], v[0], v[1]) if v else '0, 0, 0'
+        pp = '%s, sizeof(%s), "%s"' % (p[0], p[0], p[1]) if p else '0, 0, 0'
+        f.write('  {"%s", %s, %s},\n' % (name, vv, pp))
+    f.write('};\n')
+print(len(tests), 'tests,', len(blobs), 'libraries,', sum(map(len, blobs.values())), 'bytes')
