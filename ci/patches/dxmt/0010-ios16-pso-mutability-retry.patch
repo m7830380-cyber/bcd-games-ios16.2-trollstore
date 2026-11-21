@@ -1,0 +1,161 @@
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index bc020f8..1b32bdc 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1757,6 +1757,120 @@ static obj_handle_t madeira_arch_create(id<MTLDevice> device, id descriptor, int
+   return pso;
+ }
+ 
++/* Madeira iOS 16: [pso-mut]. DXMT marks buffers 16/29/30 MTLMutabilityImmutable;
++ * on iOS 16 (AGXMetalG15) such pipelines failed with "Failed to materializeAll."
++ * while the same shader bytes compiled in a descriptor with default mutability.
++ * On a failure, retry once with every buffer at the default mutability; when that
++ * fails as well, try a minimal descriptor (functions and formats only) for the log.
++ * MADEIRA_PSO_MUT_RETRY=0 turns it off, =1 forces it on; unset = iOS < 17 only. */
++static int
++wmt_pso_mut_wanted(void) {
++  static int on = -1;
++  if (on < 0) {
++    const char *e = getenv("MADEIRA_PSO_MUT_RETRY");
++    if (e && *e)
++      on = strcmp(e, "0") != 0;
++    else if (@available(iOS 17.0, macOS 14.0, *))
++      on = 0;
++    else
++      on = 1;
++  }
++  return on;
++}
++
++static atomic_int wmt_pso_mut_logged;
++
++static const char *
++wmt_pso_mut_name(id<MTLFunction> f) {
++  return f ? [[f name] UTF8String] : "(none)";
++}
++
++static const char *
++wmt_pso_mut_err(NSError *e) {
++  return e ? [[e localizedDescription] UTF8String] : "no error";
++}
++
++static obj_handle_t
++wmt_pso_mut_render(id<MTLDevice> device, MTLRenderPipelineDescriptor *d, MTLPipelineOption options, NSError *first) {
++  NSError *e = nil;
++  obj_handle_t pso;
++  int log;
++  if (!wmt_pso_mut_wanted())
++    return 0;
++  for (unsigned i = 0; i < 31; i++) {
++    d.vertexBuffers[i].mutability = MTLMutabilityDefault;
++    d.fragmentBuffers[i].mutability = MTLMutabilityDefault;
++  }
++  d.binaryArchives = nil;
++  pso = (obj_handle_t)[device newRenderPipelineStateWithDescriptor:d
++                                                           options:(MTLPipelineOption)(options & ~MTLPipelineOptionFailOnBinaryArchiveMiss)
++                                                        reflection:nil
++                                                             error:&e];
++  log = atomic_fetch_add(&wmt_pso_mut_logged, 1) < 24;
++  if (log)
++    fprintf(stderr, "[pso-mut] render PSO vs=%s fs=%s failed (%s); with default buffer mutability: %s%s\n",
++            wmt_pso_mut_name(d.vertexFunction), wmt_pso_mut_name(d.fragmentFunction), wmt_pso_mut_err(first),
++            pso ? "OK" : "FAIL ", pso ? "" : wmt_pso_mut_err(e));
++  if (pso || !log)
++    return pso;
++  {
++    MTLRenderPipelineDescriptor *m = [[MTLRenderPipelineDescriptor alloc] init];
++    id p;
++    m.vertexFunction = d.vertexFunction;
++    m.fragmentFunction = d.fragmentFunction;
++    for (unsigned i = 0; i < 8; i++)
++      m.colorAttachments[i].pixelFormat = d.colorAttachments[i].pixelFormat;
++    m.depthAttachmentPixelFormat = d.depthAttachmentPixelFormat;
++    m.stencilAttachmentPixelFormat = d.stencilAttachmentPixelFormat;
++    m.rasterSampleCount = d.rasterSampleCount;
++    m.inputPrimitiveTopology = d.inputPrimitiveTopology;
++    m.rasterizationEnabled = d.rasterizationEnabled;
++    e = nil;
++    p = [device newRenderPipelineStateWithDescriptor:m error:&e];
++    fprintf(stderr, "[pso-mut]   minimal descriptor (functions + formats): %s%s\n", p ? "OK" : "FAIL ",
++            p ? "" : wmt_pso_mut_err(e));
++    [p release];
++    if (m.fragmentFunction) {
++      m.fragmentFunction = nil;
++      e = nil;
++      p = [device newRenderPipelineStateWithDescriptor:m error:&e];
++      fprintf(stderr, "[pso-mut]   vertex function alone: %s%s\n", p ? "OK" : "FAIL ", p ? "" : wmt_pso_mut_err(e));
++      [p release];
++    }
++    [m release];
++  }
++  return 0;
++}
++
++static obj_handle_t
++wmt_pso_mut_compute(id<MTLDevice> device, MTLComputePipelineDescriptor *d, MTLPipelineOption options, NSError *first) {
++  NSError *e = nil;
++  obj_handle_t pso;
++  int log;
++  if (!wmt_pso_mut_wanted())
++    return 0;
++  for (unsigned i = 0; i < 31; i++)
++    d.buffers[i].mutability = MTLMutabilityDefault;
++  d.binaryArchives = nil;
++  pso = (obj_handle_t)[device newComputePipelineStateWithDescriptor:d
++                                                            options:(MTLPipelineOption)(options & ~MTLPipelineOptionFailOnBinaryArchiveMiss)
++                                                         reflection:nil
++                                                              error:&e];
++  log = atomic_fetch_add(&wmt_pso_mut_logged, 1) < 24;
++  if (log)
++    fprintf(stderr, "[pso-mut] compute PSO cs=%s failed (%s); with default buffer mutability: %s%s\n",
++            wmt_pso_mut_name(d.computeFunction), wmt_pso_mut_err(first), pso ? "OK" : "FAIL ",
++            pso ? "" : wmt_pso_mut_err(e));
++  if (!pso && log && d.computeFunction) {
++    id p;
++    e = nil;
++    p = [device newComputePipelineStateWithFunction:d.computeFunction error:&e];
++    fprintf(stderr, "[pso-mut]   function alone: %s%s\n", p ? "OK" : "FAIL ", p ? "" : wmt_pso_mut_err(e));
++    [p release];
++  }
++  return pso;
++}
++
+ static NTSTATUS
+ _MTLDevice_newComputePipelineState(void *obj) {
+   struct unixcall_mtldevice_newcomputepso *params = obj;
+@@ -1807,6 +1921,11 @@ _MTLDevice_newComputePipelineState(void *obj) {
+     if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 1);
+   }
+   [madeira_arch release];
++  if (err && !params->ret_pso) {   /* Madeira iOS 16: [pso-mut] */
++    params->ret_pso = wmt_pso_mut_compute(device, descriptor, options, err);
++    if (params->ret_pso)
++      err = NULL;
++  }
+   params->ret_error = (obj_handle_t)err;
+   if (!err && info->binary_archive_for_serialization) {
+     [(id<MTLBinaryArchive>)info->binary_archive_for_serialization addComputePipelineFunctionsWithDescriptor:descriptor
+@@ -2266,6 +2385,11 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+     if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 0);
+   }
+   [madeira_arch release];
++  if (err && !params->ret_pso) {   /* Madeira iOS 16: [pso-mut] */
++    params->ret_pso = wmt_pso_mut_render((id<MTLDevice>)params->device, descriptor, options, err);
++    if (params->ret_pso)
++      err = NULL;
++  }
+   if (err && !params->ret_pso)   /* Madeira iOS 16: [pso-probe] */
+     wmt_pso_probe((id<MTLDevice>)params->device, descriptor);
+   params->ret_error = (obj_handle_t)err;
+@@ -2389,6 +2513,11 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
+     if (madeira_arch && params->ret_pso && !err) madeira_arch_add(descriptor, 0);
+   }
+   [madeira_arch release];
++  if (err && !params->ret_pso) {   /* Madeira iOS 16: [pso-mut] */
++    params->ret_pso = wmt_pso_mut_render((id<MTLDevice>)params->device, descriptor, options, err);
++    if (params->ret_pso)
++      err = NULL;
++  }
+   if (err && !params->ret_pso)   /* Madeira iOS 16: [pso-probe] */
+     wmt_pso_probe((id<MTLDevice>)params->device, descriptor);
+   params->ret_error = (obj_handle_t)err;
