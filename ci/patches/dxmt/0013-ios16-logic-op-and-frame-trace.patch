@@ -1,0 +1,356 @@
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 18f5006..91396b3 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -47,6 +47,9 @@ extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name,
+ #include "../airconv_thunks.h"
+ #include <math.h>
+ static id<MTLTexture> g_cap_fs_tex0;   /* [frame-cap]: fragment texture 0 of the last directly bound encoder (the present blit's backbuffer) */
++static int g_ft_on;   /* [ftrace] */
++static void ft_pass_begin(uint64_t cb, uint64_t enc, const struct WMTRenderPassInfo *info);   /* [ftrace] */
++static int ft_pass_end(uint64_t enc);   /* [ftrace] */
+ 
+ /* iOS-Madeira 2026-05-22 draw-call telemetry. Defined further down with
+  * the present counter; forward-declared here so the draw command cases
+@@ -2091,6 +2094,7 @@ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
+     ios_frame_pass(0, loads, stores, clears);
+   }
+ 
++  ft_pass_begin(params->handle, params->ret, info);   /* [ftrace] */
+   [descriptor release];
+   return STATUS_SUCCESS;
+ }
+@@ -2098,6 +2102,8 @@ _MTLCommandBuffer_renderCommandEncoder(void *obj) {
+ static NTSTATUS
+ _MTLCommandEncoder_endEncoding(void *obj) {
+   struct unixcall_generic_obj_noret *params = obj;
++  if (g_ft_on && !wmtr_enabled() && ft_pass_end(params->handle))   /* [ftrace]: ended it, readback queued */
++    return STATUS_SUCCESS;
+   if (wmtr_enabled()) {
+     struct rm_arg_handle a = { params->handle };
+     wmtr_call(RM_OP_END_ENCODING, &a, sizeof a, 0, 0, 0);
+@@ -2338,8 +2344,13 @@ _MTLDevice_newRenderPipelineState(void *obj) {
+   }
+ 
+ #ifndef DXMT_NO_PRIVATE_API
+-  [descriptor setLogicOperationEnabled:info->logic_operation_enabled];
+-  [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++  /* Madeira iOS 16: touch the private logic-op state only when the game asks
++   * for a logic op. Setting logicOperation = Clear (0) with enabled = NO was
++   * harmless on iOS 17+/macOS; on iOS 16 AGX every pipeline then writes zero. */
++  if (info->logic_operation_enabled) {
++    [descriptor setLogicOperationEnabled:YES];
++    [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++  }
+ #endif
+   descriptor.depthAttachmentPixelFormat = to_metal_pixel_format(info->depth_pixel_format);
+   descriptor.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
+@@ -2449,8 +2460,13 @@ _MTLDevice_newRenderPipelineStateVD(void *obj) {
+   }
+ 
+ #ifndef DXMT_NO_PRIVATE_API
+-  [descriptor setLogicOperationEnabled:info->logic_operation_enabled];
+-  [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++  /* Madeira iOS 16: touch the private logic-op state only when the game asks
++   * for a logic op. Setting logicOperation = Clear (0) with enabled = NO was
++   * harmless on iOS 17+/macOS; on iOS 16 AGX every pipeline then writes zero. */
++  if (info->logic_operation_enabled) {
++    [descriptor setLogicOperationEnabled:YES];
++    [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++  }
+ #endif
+   descriptor.depthAttachmentPixelFormat = to_metal_pixel_format(info->depth_pixel_format);
+   descriptor.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
+@@ -2623,8 +2639,13 @@ _MTLDevice_newMeshRenderPipelineState(void *obj) {
+   }
+ 
+ #ifndef DXMT_NO_PRIVATE_API
+-  [descriptor setLogicOperationEnabled:info->logic_operation_enabled];
+-  [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++  /* Madeira iOS 16: touch the private logic-op state only when the game asks
++   * for a logic op. Setting logicOperation = Clear (0) with enabled = NO was
++   * harmless on iOS 17+/macOS; on iOS 16 AGX every pipeline then writes zero. */
++  if (info->logic_operation_enabled) {
++    [descriptor setLogicOperationEnabled:YES];
++    [descriptor setLogicOperation:(MTLLogicOperation)info->logic_operation];
++  }
+ #endif
+   descriptor.depthAttachmentPixelFormat = to_metal_pixel_format(info->depth_pixel_format);
+   descriptor.stencilAttachmentPixelFormat = to_metal_pixel_format(info->stencil_pixel_format);
+@@ -3213,6 +3234,249 @@ wmt_render_cmd_is_draw(uint32_t type) {
+   }
+ }
+ 
++/* madeira-bcd iOS 16 FRAME TRACE ([ftrace]): the frame after presents #299
++ * and #899, pass by pass. Each render pass logs its attachments (format,
++ * size, load/store, clear values), then its draws (first few in full, with
++ * viewport, scissor and the vertex-buffer table entry the shader reads), and
++ * after the pass the GPU's real output: colour attachment 0 is copied out and
++ * its average and lit share logged when the command buffer completes. That
++ * says which pass first produces black, and why. */
++static unsigned g_ft_pass, g_ft_frame;
++static id<MTLCommandBuffer> g_ft_cb;
++static uint64_t g_ft_enc;
++static id<MTLTexture> g_ft_color0;
++static unsigned g_ft_draws, g_ft_skipped, g_ft_psos, g_ft_nullpso, g_ft_logged;
++static struct WMTViewport g_ft_vp;
++static struct WMTScissorRect g_ft_sc;
++static int g_ft_have_vp, g_ft_have_sc, g_ft_cull = -1;
++static id<MTLBuffer> g_ft_vbuf[32];
++static uint64_t g_ft_voff[32];
++
++static float ft_half(uint16_t h) {
++  uint32_t s = (h >> 15) & 1, e = (h >> 10) & 31, m = h & 1023;
++  float v = e == 0 ? m / 16777216.0f : e == 31 ? 65504.0f : ldexpf(1.0f + m / 1024.0f, (int)e - 15);
++  return s ? -v : v;
++}
++
++static void ft_readback(id<MTLCommandBuffer> cb, id<MTLTexture> t, id<MTLFence> fence, unsigned frame, unsigned pass) {
++  if (!t) return;
++  if (t.sampleCount > 1 || t.storageMode == MTLStorageModeMemoryless || t.isFramebufferOnly ||
++      (t.textureType != MTLTextureType2D && t.textureType != MTLTextureType2DArray)) {
++    fprintf(stderr, "[ftrace] f%u pass %u: color0 not copyable (samples=%lu storage=%lu type=%lu)\n", frame, pass,
++            (unsigned long)t.sampleCount, (unsigned long)t.storageMode, (unsigned long)t.textureType);
++    return;
++  }
++  MTLPixelFormat fmt = t.pixelFormat;
++  int bpp = 0, ch = 4, kind = 0; /* kind 0 unorm8, 1 half, 2 float, 3 rgb10a2 */
++  switch (fmt) {
++  case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB:
++  case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB: bpp = 4; break;
++  case MTLPixelFormatR8Unorm: bpp = 1; ch = 1; break;
++  case MTLPixelFormatRG8Unorm: bpp = 2; ch = 2; break;
++  case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatBGR10A2Unorm: bpp = 4; kind = 3; break;
++  case MTLPixelFormatRGBA16Float: bpp = 8; kind = 1; break;
++  case MTLPixelFormatRG16Float: bpp = 4; ch = 2; kind = 1; break;
++  case MTLPixelFormatR16Float: bpp = 2; ch = 1; kind = 1; break;
++  case MTLPixelFormatRGBA32Float: bpp = 16; kind = 2; break;
++  case MTLPixelFormatR32Float: bpp = 4; ch = 1; kind = 2; break;
++  default:
++    fprintf(stderr, "[ftrace] f%u pass %u: color0 format %lu not decoded\n", frame, pass, (unsigned long)fmt);
++    return;
++  }
++  NSUInteger w = t.width, h = t.height, bpr = w * bpp;
++  id<MTLBuffer> buf = [cb.device newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
++  if (!buf) return;
++  id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
++  if (fence) [blit waitForFence:fence];   /* DXMT's textures are untracked: wait for the pass */
++  [blit copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
++             sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0
++    destinationBytesPerRow:bpr destinationBytesPerImage:bpr * h];
++  [blit endEncoding];
++  [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
++   @autoreleasepool {
++    const uint8_t *px = buf.contents;
++    double sum[4] = {0, 0, 0, 0}, mx[4] = {0, 0, 0, 0};
++    unsigned long lit = 0, nonzero = 0, nan = 0;
++    for (NSUInteger i = 0; i < w * h; i++) {
++      float c[4] = {0, 0, 0, 0};
++      const uint8_t *p = px + i * bpp;
++      for (int k = 0; k < ch; k++) {
++        if (kind == 0) c[k] = p[k] / 255.f;
++        else if (kind == 1) c[k] = ft_half(((const uint16_t *)p)[k]);
++        else if (kind == 2) c[k] = ((const float *)p)[k];
++      }
++      if (kind == 3) {
++        uint32_t v = *(const uint32_t *)p;
++        c[0] = (v & 1023) / 1023.f; c[1] = ((v >> 10) & 1023) / 1023.f; c[2] = ((v >> 20) & 1023) / 1023.f; c[3] = (v >> 30) / 3.f;
++      }
++      if (fmt == MTLPixelFormatBGRA8Unorm || fmt == MTLPixelFormatBGRA8Unorm_sRGB || fmt == MTLPixelFormatBGR10A2Unorm) {
++        float x = c[0]; c[0] = c[2]; c[2] = x;
++      }
++      int any = 0;
++      for (int k = 0; k < 4; k++) {
++        if (c[k] != c[k]) { nan++; c[k] = 0; }
++        sum[k] += c[k];
++        if (c[k] > mx[k]) mx[k] = c[k];
++        any |= c[k] != 0;
++      }
++      nonzero += any;
++      if (c[0] > 0.02f || c[1] > 0.02f || c[2] > 0.02f) lit++;
++    }
++    double n = (double)(w * h);
++    fprintf(stderr, "[ftrace] f%u pass %u OUTPUT %lux%lu fmt=%lu: avg r=%.3f g=%.3f b=%.3f a=%.3f max r=%.3f g=%.3f b=%.3f a=%.3f "
++                    "lit=%.1f%% nonzero=%.1f%% nan=%lu cmdbuf status=%ld error=%s\n",
++            frame, pass, (unsigned long)w, (unsigned long)h, (unsigned long)fmt, sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n,
++            mx[0], mx[1], mx[2], mx[3], 100.0 * lit / n, 100.0 * nonzero / n, nan, (long)done.status,
++            done.error ? done.error.localizedDescription.UTF8String : "none");
++    [buf release];
++   }
++  }];
++}
++
++static void ft_tex_desc(char *out, size_t n, id<MTLTexture> t) {
++  if (!t) { snprintf(out, n, "none"); return; }
++  snprintf(out, n, "%p fmt=%lu %lux%lu mips=%lu type=%lu samples=%lu storage=%lu%s", (void *)t, (unsigned long)t.pixelFormat,
++           (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.mipmapLevelCount, (unsigned long)t.textureType,
++           (unsigned long)t.sampleCount, (unsigned long)t.storageMode, t == g_cap_fs_tex0 ? " (=BACKBUFFER)" : "");
++}
++
++static void ft_pass_begin(uint64_t cb, uint64_t enc, const struct WMTRenderPassInfo *info) {
++  if (!g_ft_on || !enc) return;
++  unsigned p = ++g_ft_pass;
++  char d[256];
++  fprintf(stderr, "[ftrace] f%u pass %u BEGIN cb=%p rt=%ux%u samples=%u layers=%u\n", g_ft_frame, p, (void *)cb,
++          info->render_target_width, info->render_target_height, info->default_raster_sample_count,
++          info->render_target_array_length);
++  for (unsigned i = 0; i < 8; i++) {
++    const struct WMTColorAttachmentInfo *c = &info->colors[i];
++    if (!c->texture && !c->resolve_texture) continue;
++    ft_tex_desc(d, sizeof d, (id<MTLTexture>)c->texture);
++    fprintf(stderr, "[ftrace] f%u pass %u   color%u %s level=%u slice=%u load=%u store=%u clear=(%.3f %.3f %.3f %.3f)%s\n",
++            g_ft_frame, p, i, d, c->level, c->slice, (unsigned)c->load_action, (unsigned)c->store_action,
++            c->clear_color.r, c->clear_color.g, c->clear_color.b, c->clear_color.a, c->resolve_texture ? " +resolve" : "");
++  }
++  if (info->depth.texture) {
++    ft_tex_desc(d, sizeof d, (id<MTLTexture>)info->depth.texture);
++    fprintf(stderr, "[ftrace] f%u pass %u   depth %s load=%u store=%u clear=%.3f\n", g_ft_frame, p, d,
++            (unsigned)info->depth.load_action, (unsigned)info->depth.store_action, info->depth.clear_depth);
++  }
++  if (info->stencil.texture)
++    fprintf(stderr, "[ftrace] f%u pass %u   stencil %p load=%u store=%u clear=%u\n", g_ft_frame, p,
++            (void *)info->stencil.texture, (unsigned)info->stencil.load_action, (unsigned)info->stencil.store_action,
++            info->stencil.clear_stencil);
++  g_ft_cb = (id<MTLCommandBuffer>)cb;
++  g_ft_enc = enc;
++  g_ft_color0 = (id<MTLTexture>)(info->colors[0].resolve_texture ? info->colors[0].resolve_texture : info->colors[0].texture);
++  g_ft_draws = g_ft_skipped = g_ft_psos = g_ft_nullpso = g_ft_logged = 0;
++  g_ft_have_vp = g_ft_have_sc = 0;
++  g_ft_cull = -1;
++}
++
++static void ft_log_draw(const char *what, const struct wmtcmd_base *cmd, int pso_ok) {
++  char a[200] = "";
++  if (cmd->type == WMTRenderCommandDraw) {
++    const struct wmtcmd_render_draw *b = (const void *)cmd;
++    snprintf(a, sizeof a, "prim=%u start=%llu count=%llu inst=%u", (unsigned)b->primitive_type,
++             (unsigned long long)b->vertex_start, (unsigned long long)b->vertex_count, b->instance_count);
++  } else if (cmd->type == WMTRenderCommandDrawIndexed) {
++    const struct wmtcmd_render_draw_indexed *b = (const void *)cmd;
++    snprintf(a, sizeof a, "prim=%u idx=%llu type=%u ibuf=%p+%llu inst=%u basevtx=%d", (unsigned)b->primitive_type,
++             (unsigned long long)b->index_count, (unsigned)b->index_type, (void *)b->index_buffer,
++             (unsigned long long)b->index_buffer_offset, b->instance_count, b->base_vertex);
++  }
++  fprintf(stderr, "[ftrace] f%u pass %u   %s #%u type=%u %s pso_ok=%d cull=%d", g_ft_frame, g_ft_pass, what, g_ft_draws,
++          (unsigned)cmd->type, a, pso_ok, g_ft_cull);
++  if (g_ft_have_vp)
++    fprintf(stderr, " vp=(%.1f,%.1f %.1fx%.1f z%.2f..%.2f)", g_ft_vp.originX, g_ft_vp.originY, g_ft_vp.width,
++            g_ft_vp.height, g_ft_vp.znear, g_ft_vp.zfar);
++  else
++    fprintf(stderr, " vp=unset");
++  if (g_ft_have_sc)
++    fprintf(stderr, " sc=(%llu,%llu %llux%llu)", (unsigned long long)g_ft_sc.x, (unsigned long long)g_ft_sc.y,
++            (unsigned long long)g_ft_sc.width, (unsigned long long)g_ft_sc.height);
++  /* the vertex-buffer table the shader reads (vertex buffer 16): {gpu address, stride, length} per slot */
++  id<MTLBuffer> vt = g_ft_vbuf[16];
++  if (vt && vt.storageMode != MTLStorageModePrivate && g_ft_voff[16] + 32 <= vt.length) {
++    const uint8_t *e = (const uint8_t *)vt.contents + g_ft_voff[16];
++    for (int s = 0; s < 2; s++) {
++      uint64_t addr; uint32_t stride, len;
++      memcpy(&addr, e + s * 16, 8); memcpy(&stride, e + s * 16 + 8, 4); memcpy(&len, e + s * 16 + 12, 4);
++      fprintf(stderr, " vb%d={addr=%#llx stride=%u len=%u}", s, (unsigned long long)addr, stride, len);
++    }
++  } else {
++    fprintf(stderr, " vbtable=%p+%llu(%s)", (void *)vt, (unsigned long long)g_ft_voff[16],
++            vt ? "unreadable" : "unbound");
++  }
++  id<MTLBuffer> cbt = g_ft_vbuf[29];
++  if (cbt && cbt.storageMode != MTLStorageModePrivate && g_ft_voff[29] + 8 <= cbt.length) {
++    uint64_t cb0;
++    memcpy(&cb0, (const uint8_t *)cbt.contents + g_ft_voff[29], 8);
++    fprintf(stderr, " vs-cb0=%#llx", (unsigned long long)cb0);
++  }
++  fprintf(stderr, "\n");
++}
++
++static void ft_cmd(const struct wmtcmd_base *cmd, int pso_ok) {
++  switch ((enum WMTRenderCommandType)cmd->type) {
++  case WMTRenderCommandSetPSO: {
++    const struct wmtcmd_render_setpso *b = (const void *)cmd;
++    g_ft_psos++;
++    if (!b->pso) g_ft_nullpso++;
++    break;
++  }
++  case WMTRenderCommandSetViewports: {
++    const struct wmtcmd_render_setviewports *b = (const void *)cmd;
++    if (b->viewport_count) { memcpy(&g_ft_vp, b->viewports.ptr, sizeof g_ft_vp); g_ft_have_vp = 1; }
++    break;
++  }
++  case WMTRenderCommandSetScissorRects: {
++    const struct wmtcmd_render_setscissorrects *b = (const void *)cmd;
++    if (b->rect_count) { memcpy(&g_ft_sc, b->scissor_rects.ptr, sizeof g_ft_sc); g_ft_have_sc = 1; }
++    break;
++  }
++  case WMTRenderCommandSetRasterizerState: {
++    const struct wmtcmd_render_setrasterizerstate *b = (const void *)cmd;
++    g_ft_cull = (int)b->cull_mode;
++    break;
++  }
++  case WMTRenderCommandSetVertexBuffer: {
++    const struct wmtcmd_render_setbuffer *b = (const void *)cmd;
++    if (b->index < 32) { g_ft_vbuf[b->index] = (id<MTLBuffer>)b->buffer; g_ft_voff[b->index] = b->offset; }
++    break;
++  }
++  case WMTRenderCommandSetVertexBufferOffset: {
++    const struct wmtcmd_render_setbufferoffset *b = (const void *)cmd;
++    if (b->index < 32) g_ft_voff[b->index] = b->offset;
++    break;
++  }
++  default:
++    if (wmt_render_cmd_is_draw(cmd->type)) {
++      int ok = pso_ok;
++      if (!ok) g_ft_skipped++;
++      if (g_ft_logged < 3) { g_ft_logged++; ft_log_draw(ok ? "draw" : "SKIPPED draw", cmd, ok); }
++      g_ft_draws++;
++    }
++    break;
++  }
++}
++
++/* Ends the traced pass's encoder itself (the readback blit must follow the
++ * render encoder) and returns 1; 0 for any other encoder. */
++static int ft_pass_end(uint64_t enc) {
++  if (!g_ft_on || enc != g_ft_enc || !g_ft_enc) return 0;
++  @autoreleasepool {
++  id<MTLFence> fence = [g_ft_cb.device newFence];
++  if (fence) [(id<MTLRenderCommandEncoder>)enc updateFence:fence afterStages:MTLRenderStageFragment];
++  [(id<MTLCommandEncoder>)enc endEncoding];
++  fprintf(stderr, "[ftrace] f%u pass %u END draws=%u skipped=%u psos=%u null-psos=%u\n", g_ft_frame, g_ft_pass,
++          g_ft_draws, g_ft_skipped, g_ft_psos, g_ft_nullpso);
++  ft_readback(g_ft_cb, g_ft_color0, fence, g_ft_frame, g_ft_pass);
++  /* the fence is deliberately not released: the command buffer may hold it unretained (34 per run) */
++  }
++  g_ft_enc = 0;
++  return 1;
++}
++
+ static NTSTATUS
+ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+   struct unixcall_generic_obj_cmd_noret *params = obj;
+@@ -3304,6 +3568,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     pso_ok = true;
+   }
+   while (next) {
++    if (g_ft_on) ft_cmd(next, pso_ok);   /* [ftrace] */
+     if (!pso_ok && wmt_render_cmd_is_draw(next->type)) {
+       next = next->next.ptr;
+       continue;
+@@ -4410,6 +4675,18 @@ static void cap_texture(id<MTLCommandBuffer> cb, id<MTLTexture> t, const char *w
+ 
+ static void cap_maybe(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable) {
+   unsigned frame = ++g_cap_presents;
++  if (g_ft_on) {   /* [ftrace] the traced frame ends with this present */
++    fprintf(stderr, "[ftrace] f%u END at present #%u (%u render passes)\n", g_ft_frame, frame, g_ft_pass);
++    g_ft_on = 0;
++  }
++  if (frame == 299 || frame == 899) {
++    g_ft_frame = frame + 1;
++    g_ft_pass = 0;
++    g_ft_enc = 0;
++    memset(g_ft_vbuf, 0, sizeof g_ft_vbuf);
++    fprintf(stderr, "[ftrace] f%u BEGIN (after present #%u)\n", g_ft_frame, frame);
++    g_ft_on = 1;
++  }
+   if (frame != 120 && frame != 400 && frame != 900) return;
+   @autoreleasepool {
+     CAMetalLayer *layer = drawable.layer;
