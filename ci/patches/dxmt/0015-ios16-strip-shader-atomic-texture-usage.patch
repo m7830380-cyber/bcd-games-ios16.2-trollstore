@@ -1,0 +1,21 @@
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 9b1a371..1884a01 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1122,7 +1122,15 @@ fill_texture_descriptor(MTLTextureDescriptor *desc, struct WMTTextureInfo *info)
+   desc.arrayLength = info->array_length;
+   desc.mipmapLevelCount = info->mipmap_level_count;
+   desc.sampleCount = info->sample_count;
+-  desc.usage = (MTLTextureUsage)info->usage;
++  MTLTextureUsage usage = (MTLTextureUsage)info->usage;
++  /* Madeira iOS 16: MTLTextureUsageShaderAtomic (0x20) arrived in iOS 17.
++   * iOS 16's Metal rejects the unknown bit with a hard assertion
++   * ("MTLTextureUsage has unknown bits 0x20") that kills the game (Brick
++   * Rigs: R32_UINT UAV textures), so drop it there. */
++  if (@available(iOS 17.0, macOS 14.0, *)) {} else {
++    usage &= ~(MTLTextureUsage)0x20;
++  }
++  desc.usage = usage;
+   desc.resourceOptions = madeira_cpu_cache_mode((MTLResourceOptions)info->options);
+ };
+ 
