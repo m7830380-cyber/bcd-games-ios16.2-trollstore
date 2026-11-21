@@ -1,0 +1,69 @@
+diff --git a/src/airconv/dxbc_converter_gs.cpp b/src/airconv/dxbc_converter_gs.cpp
+index 6c152a1..f29d63b 100644
+--- a/src/airconv/dxbc_converter_gs.cpp
++++ b/src/airconv/dxbc_converter_gs.cpp
+@@ -683,6 +683,9 @@ convert_dxbc_vertex_for_geometry_shader(
+ 
+   // explicit initialization
+   air.CreateAtomicRMW(llvm::AtomicRMWInst::BinOp::And, valid_vertex_mask, builder.getInt32(0));
++  /* Madeira iOS 16: every thread clears the mask; make sure all of them have
++   * before any sets its bit, or a late clear drops valid primitives. */
++  air.CreateBarrier(llvm::air::MemFlags::Threadgroup);
+ 
+   builder.CreateCondBr(
+       builder.CreateICmp(llvm::CmpInst::ICMP_ULT, global_index_id, vertex_count), index_check, will_dispatch
+@@ -748,7 +751,12 @@ convert_dxbc_vertex_for_geometry_shader(
+ 
+   builder.SetInsertPoint(will_dispatch);
+ 
+-  air.CreateBarrier(llvm::air::MemFlags::Threadgroup);
++  /* Madeira iOS 16: the vertex outputs above go to the object payload
++   * (object_data memory), which a threadgroup-only barrier does not order. On
++   * iOS 16 the mesh stage then read half-written payloads: UE4's colour LUT,
++   * filled through this path, came out as random triangles, different every
++   * frame ([ftrace] pass SLICE readback), and Brick Rigs looked inverted. */
++  air.CreateBarrier(llvm::air::MemFlags((int)llvm::air::MemFlags::Threadgroup | (int)llvm::air::MemFlags::ObjectData));
+ 
+   builder.CreateCondBr(
+       builder.CreateICmp(llvm::CmpInst::ICMP_EQ, warp_vertex_id, builder.getInt32(0)), dispatch, return_
+diff --git a/src/airconv/dxbc_converter_ts.cpp b/src/airconv/dxbc_converter_ts.cpp
+index 8c9707e..c4ce9f2 100644
+--- a/src/airconv/dxbc_converter_ts.cpp
++++ b/src/airconv/dxbc_converter_ts.cpp
+@@ -696,7 +696,8 @@ convert_dxbc_vertex_hull_shader(
+     builder.SetInsertPoint(real_return);
+   }
+ 
+-  air.CreateBarrier(llvm::air::MemFlags::Threadgroup);
++  /* Madeira iOS 16: order the object payload writes too (see the GS path) */
++  air.CreateBarrier(llvm::air::MemFlags((int)llvm::air::MemFlags::Threadgroup | (int)llvm::air::MemFlags::ObjectData));
+   builder.CreateRetVoid();
+ 
+   module.getOrInsertNamedMetadata("air.object")->addOperand(function_metadata);
+diff --git a/src/airconv/nt/air_builder.hpp b/src/airconv/nt/air_builder.hpp
+index a5f7668..bdaed2b 100644
+--- a/src/airconv/nt/air_builder.hpp
++++ b/src/airconv/nt/air_builder.hpp
+@@ -93,7 +93,8 @@ enum class MemFlags {
+   Device = 1,
+   Threadgroup = 2,
+   Texture = 4,
+-  ObjectData = 4,
++  /* Madeira iOS 16: MSL mem_object_data is 16 (mem_texture is 4) */
++  ObjectData = 16,
+ };
+ 
+ enum class ThreadScope {
+diff --git a/src/dxmt/dxmt_shader_cache.hpp b/src/dxmt/dxmt_shader_cache.hpp
+index 8e73c51..738e910 100644
+--- a/src/dxmt/dxmt_shader_cache.hpp
++++ b/src/dxmt/dxmt_shader_cache.hpp
+@@ -5,7 +5,7 @@
+ 
+ namespace dxmt {
+ 
+-constexpr int kDXMTShaderCacheVersion = 19; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17 */
++constexpr int kDXMTShaderCacheVersion = 20; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17; Madeira iOS 16: object payload barrier */
+ 
+ // Base directory every DXMT cache lives under, so the Metal shader cache and
+ // this one cannot disagree about where that is.
