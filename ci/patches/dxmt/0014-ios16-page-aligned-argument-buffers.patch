@@ -1,0 +1,108 @@
+diff --git a/src/dxmt/dxmt_ring_bump_allocator.hpp b/src/dxmt/dxmt_ring_bump_allocator.hpp
+index 4feb972..24d6637 100644
+--- a/src/dxmt/dxmt_ring_bump_allocator.hpp
++++ b/src/dxmt/dxmt_ring_bump_allocator.hpp
+@@ -9,6 +9,7 @@
+ #include <mutex>
+ #include <queue>
+ #include "dxmt_mem_census.hpp"
++#include "wsi_platform.hpp"
+ 
+ namespace dxmt {
+ 
+@@ -304,10 +305,12 @@ public:
+        * is exactly the wrong order, so release it explicitly first. */
+       buffer = nullptr;
+       if (mapped_address) {
+-        free(mapped_address);
++        if (owns_mapping)   /* Madeira iOS 16: page-aligned, see allocate() */
++          wsi::aligned_free(mapped_address);
+         mapped_address = nullptr;
+       }
+     };
++    bool owns_mapping = true;                              /* Madeira iOS 16 */
+     uint64_t census_bytes = 0;                             /* ml677 */
+     MemOwner census_owner = MEMOWN_STAGING_RING;           /* ml1243 */
+ 
+@@ -320,6 +323,7 @@ public:
+       mapped_address = move.mapped_address;
+       census_bytes = move.census_bytes;                    /* ml677: move the debt too */
+       census_owner = move.census_owner;
++      owns_mapping = move.owns_mapping;                    /* Madeira iOS 16 */
+       move.census_bytes = 0;
+       move.mapped_address = nullptr;
+     };
+@@ -351,12 +355,40 @@ public:
+      * kStagingBlockSize is already 8 MB rather than 32 MB on i386. */
+     placed = true;
+ #endif
+-    block.mapped_address = placed ? malloc(block_size) : nullptr;
++    /* Madeira iOS 16: newBufferWithBytesNoCopy only wraps memory that starts
++     * on a 16 KB page and spans whole pages. A plain malloc of a block (the
++     * Windows heap: a header sits in front of every large block) never does,
++     * so Metal returned nil for every argument-buffer block: each encoder
++     * bound a nil buffer at vertex/fragment 16, 29 and 30, every shader read
++     * zeroed vertex and constant tables, and every pass drew nothing -- the
++     * all-zero frame ([ftrace] vbtable=0x0). Private storage cannot wrap CPU
++     * memory at all. If Metal still refuses, it allocates the block itself
++     * and the CPU side writes through [buffer contents]. */
++    constexpr size_t kMetalPage = 16384;
++    if (((uint64_t)buffer_info_ & 0x30) == (uint64_t)WMTResourceStorageModePrivate)
++      placed = false;
++    const size_t map_size = (block_size + kMetalPage - 1) & ~(kMetalPage - 1);
++    block.mapped_address = placed ? wsi::aligned_malloc(map_size, kMetalPage) : nullptr;
+     WMTBufferInfo info;
+     info.options = buffer_info_;
+     info.memory.set(block.mapped_address);
+-    info.length = block_size;
++    info.length = placed ? map_size : block_size;
+     block.buffer = device_.newBuffer(info);
++    if (placed && !block.buffer) {
++      static bool warned;
++      if (!warned) {
++        warned = true;
++        WARN("[ring-align] madeira ios16: Metal refused a ", map_size,
++             "-byte page-aligned block; such blocks are allocated by Metal instead");
++      }
++      wsi::aligned_free(block.mapped_address);
++      info.memory.set(nullptr);
++      info.length = block_size;
++      block.buffer = device_.newBuffer(info);
++      /* the unix side hands back [buffer contents] */
++      block.mapped_address = info.memory.get_accessible_or_null();
++      block.owns_mapping = false;
++    }
+     block.gpu_address = info.gpu_address;
+     block.census_bytes = block_size;                       /* ml677 */
+     block.census_owner = census_owner_;
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 91396b3..bc925e9 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -813,11 +813,25 @@ _MTLDevice_newBuffer(void *obj) {
+   id<MTLDevice> device = (id<MTLDevice>)params->device;
+   struct WMTBufferInfo *info = params->info.ptr;
+   id<MTLBuffer> buffer;
+-  if (info->memory.ptr) {
++  if (info->memory.ptr && (info->options & 0x30) == WMTResourceStorageModePrivate) {
++    /* Madeira iOS 16: Private storage cannot wrap CPU memory; the CPU never
++     * touches a Private buffer, so let Metal allocate it. */
++    buffer = [device newBufferWithLength:info->length options:madeira_cpu_cache_mode((MTLResourceOptions)info->options)];
++  } else if (info->memory.ptr) {
+     buffer = [device newBufferWithBytesNoCopy:info->memory.ptr
+                                        length:info->length
+                                       options:madeira_cpu_cache_mode((MTLResourceOptions)info->options)
+                                   deallocator:NULL];
++    if (!buffer) {
++      /* Madeira iOS 16: Metal wraps only 16 KB-aligned memory spanning whole
++       * pages. The caller gets NULL and must allocate differently. */
++      static unsigned refused;
++      if (++refused <= 16 || (refused & 1023) == 0)
++        fprintf(stderr, "[nocopy] #%u Metal REFUSED to wrap %p (page offset %#lx) length %llu (%#llx past a page) "
++                        "options %#x -> nil buffer\n", refused, info->memory.ptr,
++                (unsigned long)((uintptr_t)info->memory.ptr & 0x3fff), (unsigned long long)info->length,
++                (unsigned long long)(info->length & 0x3fff), (unsigned)info->options);
++    }
+   } else {
+     buffer = [device newBufferWithLength:info->length options:madeira_cpu_cache_mode((MTLResourceOptions)info->options)];
+     info->memory.ptr = [buffer storageMode] == MTLStorageModePrivate ? NULL : [buffer contents];

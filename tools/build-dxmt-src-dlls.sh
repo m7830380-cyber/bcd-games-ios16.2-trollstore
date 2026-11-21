@@ -103,7 +103,7 @@ COMMON=(
     -Wno-extern-c-compat -Wno-unused-const-variable -Wno-missing-braces -fblocks
     -DNOMINMAX -D_WIN32_WINNT=0xa00 -DDXMT_IOS=1 -fmacro-prefix-map="$D/="
 )
-CXXFLAGS=(-std=c++20 "${COMMON[@]}" -DDXMT_PAGE_SIZE=4096)
+CXXFLAGS=(-std=c++20 "${COMMON[@]}" -DDXMT_PAGE_SIZE=16384)  # iOS pages are 16 KB: Metal wraps only 16 KB-aligned memory
 CFLAGS=("${COMMON[@]}")
 INC_BASE=(-I"$D/include" -I"$D/libs")
 
