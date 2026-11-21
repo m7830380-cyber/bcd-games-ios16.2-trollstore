@@ -1,0 +1,36 @@
+diff --git a/src/airconv/metallib_writer.cpp b/src/airconv/metallib_writer.cpp
+index 85a5ac3..071159f 100644
+--- a/src/airconv/metallib_writer.cpp
++++ b/src/airconv/metallib_writer.cpp
+@@ -3,6 +3,7 @@
+ #include "llvm/IR/Constants.h"
+ #include "llvm/IR/Module.h"
+ #include "llvm/IR/Instructions.h"
++#include "llvm/IR/InstrTypes.h"
+ #include "llvm/IR/Metadata.h"
+ #include "llvm/Support/VersionTuple.h"
+ #include <cstdlib>
+@@ -120,6 +121,23 @@ static void normalise_legacy(Module &module) {
+       }
+     }
+   }
++  // iOS 16's AIR reader predates LLVM's unary fneg instruction: any function
++  // containing one fails with "Failed to materializeAll." Rewrite each fneg
++  // as fsub -0.0, x (bit-identical result, what LLVM emitted before fneg).
++  SmallVector<UnaryOperator *, 32> fnegs;
++  for (auto &F : module)
++    for (auto &BB : F)
++      for (auto &I : BB)
++        if (auto *u = dyn_cast<UnaryOperator>(&I); u && u->getOpcode() == Instruction::FNeg)
++          fnegs.push_back(u);
++  for (auto *u : fnegs) {
++    auto *sub = BinaryOperator::Create(Instruction::FSub, ConstantFP::getNegativeZero(u->getType()),
++                                       u->getOperand(0), u->getName(), u);
++    sub->copyFastMathFlags(u);
++    sub->setDebugLoc(u->getDebugLoc());
++    u->replaceAllUsesWith(sub);
++    u->eraseFromParent();
++  }
+   if (auto *flags = module.getModuleFlagsMetadata()) {
+     SmallVector<MDNode *, 16> keep;
+     for (auto *flag : flags->operands()) {
