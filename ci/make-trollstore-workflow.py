@@ -90,7 +90,15 @@ DROP_NAMES = (
     'Check the IPA reached the private bucket',
     'Package Madeira and Madeira2 unsigned IPAs',            # replaced by ci/package-tipa.sh
     'StikJIT interface for the runner\'s Swift',             # re-added below with || true
+    # BCD 0.1.686's post-archive checks hold the app to BCD's oldest iOS (18): with this port's
+    # MinimumOSVersion 16.0 every guarded iOS 17/18 API would stop the build. ci/package-tipa.sh
+    # checks the app's system imports against iOS 16 instead.
+    'Check the app for weak C imports newer than its oldest iOS',
+    'Check the app against older iOS runtimes',
+    'Check compiler availability warnings above the app\'s oldest iOS',
 )
+
+DROP_WITH_COMMENT = DROP_NAMES[-3:]
 
 def is_kosmickrisp(s):
     return 'kosmickrisp' in step_name(s).lower() or 'kosmic' in ' '.join(run_lines(s)).lower() and \
@@ -101,6 +109,11 @@ for s in steps:
     n = step_name(s)
     if n in DROP_NAMES:
         dropped['named'] += 1
+        # the dropped step's own comment block ends the step before it
+        if kept and n in DROP_WITH_COMMENT:
+            prev = kept[-1]['lines']
+            while prev and prev[-1].lstrip().startswith('#'):
+                prev.pop()
         continue
     if is_kosmickrisp(s):
         dropped['kosmickrisp'] += 1

@@ -252,6 +252,11 @@ jobs:
             echo ""
             echo "/* iOS SDK fixups appended by CI */"
             echo "#undef HAVE_GETATTRLIST"
+            echo "/* pipe2() is new in iOS 27's libc: with the iOS 27 SDK configure finds it, the app"
+            echo " * imports it weakly, and on iOS 26 and older the call goes to address 0 and every game"
+            echo " * launch crashes in server_pipe (0.1.682, iPadOS 26.6.2 crash reports). The app runs"
+            echo " * on iOS 18 and later: use pipe() + FD_CLOEXEC, as Wine does without pipe2. */"
+            echo "#undef HAVE_PIPE2"
             echo "#ifndef D_TAPE"
             echo "#define D_TAPE 1"
             echo "#endif"
@@ -1384,6 +1389,9 @@ jobs:
           python3 tools/patch-dock-ceg-service-restart.py madeira-dock/src/scm.c || echo "::warning::Dock CEG service restart patch not applied"
           python3 tools/patch-dock-ceg-retry.py madeira-dock/src/launch.c || echo "::warning::Dock CEG retry patch not applied"
           python3 tools/patch-dock-ceg-already-prepared.py madeira-dock/src/launch.c madeira-dock/src/validation.c || echo "::warning::Dock CEG already-prepared patch not applied"
+          # 2026-11-20 (a Discord request: Steam launch options): a Steam game's Launch arguments go to Valve's LaunchApp as its user arguments
+          # (MADEIRA_STEAM_HOST_ARGUMENTS, set by the app only when the game has some; none: "" as before)
+          python3 tools/patch-dock-user-args.py madeira-dock/src/launch.c || echo "::warning::Dock user arguments patch not applied"
           bash build/madeira-dock/build.sh
 
       # madeira-bcd (round 624, Steam 113: 39 of 187 Rockstar Dock sessions): the Dock patches in order on a copy, the readback
