@@ -259,25 +259,39 @@ ps_direct = ps_direct.replace('%argument_buffer_struct = type { %struct._sampler
 # lod 0 plus Apple's spelling of the texture type name
 ps_ab_min = ps_lod0.replace('!"texture2d<float,sample>"', '!"texture2d<float, sample>"')
 
-# ---- round 3: round 2 failed exactly the tests that call an air.* intrinsic
-# (fma, sample_texture_2d); airconv declares those willreturn nofree nosync,
-# Apple's iOS 16 toolchain never does. Strip only those and retry.
-def noattr(t):
-    out = re.sub(r'^(attributes #\d+ = \{)(.*)\}$',
-                 lambda m: m.group(1) + re.sub(r'\s(willreturn|nofree|nosync|mustprogress|nocallback)(?=\s)', '', ' ' + m.group(2) + ' ').rstrip() + ' }',
-                 t, flags=re.M)
-    assert out != t
-    return out.replace('{  ', '{ ')
+# ---- round 4: with the attributes stripped in airconv (0009) the live shaders
+# now fail with "Failed to materializeAll", while the same IR passed in round 3
+# after a llvm-dis/llvm-as round trip. Take two failing live libraries as the
+# game made them (pso-probe-ref/live) and vary only the bitcode encoding:
+# airconv writes a module hash and no use-list order, llvm-as the opposite.
+rw = os.path.join(work, 'bc-rewrite')
+run('g++', '-std=c++17', '-I/usr/lib/llvm-15/include', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bc-rewrite.cpp'),
+    '-L/usr/lib/llvm-15/lib', '-lLLVM-15', '-Wl,-rpath,/usr/lib/llvm-15/lib', '-o', rw)
 
-# (name, vertex (lib, fn) or None for the MSL v_tc, fragment (lib, fn) or None)
-tests = [
-    ('VS bare',                    V(asm(bare, 'vs_bare')), None),
-    ('VS math (as round 2)',       V(asm(vs_math, 'vs_math')), None),
-    ('VS math -willreturn/nofree', V(asm(noattr(vs_math), 'vs_math_na')), None),
-    ('PS direct -willreturn/nofree', None, P(asm(noattr(ps_direct), 'ps_direct_na'))),
-    ('VS orig -willreturn/nofree', V(asm(noattr(vs), 'vs_orig_na')), None),
-    ('PS orig -willreturn/nofree', None, P(asm(noattr(ps), 'ps_orig_na'))),
-]
+def rewrite(bc, name, uselist, hsh):
+    p = os.path.join(work, name)
+    open(p + '.in.bc', 'wb').write(bc)
+    run(rw, p + '.in.bc', p + '.bc', '1' if uselist else '0', '1' if hsh else '0')
+    return unwrap(open(p + '.bc', 'rb').read())
+
+tests = [('VS bare', V(asm(bare, 'vs_bare')), None)]
+for path in sorted(glob.glob(os.path.join(ref, 'live', '*.metallib'))):
+    ml = read_metallib(path)
+    kind = os.path.basename(path)[:2]
+    ty = 0 if kind == 'vs' else 1
+    fn = os.path.basename(path)[:-len('.metallib')]
+    raw_bc = ml['bc']
+    assert metallib(ml, fn, ty, raw_bc) == ml['raw'], 'container writer differs (%s)' % fn
+    t = dis(raw_bc, fn[:11] + '_live')
+    L = lambda bc: (metallib(ml, fn, ty, bc), fn)
+    def row(label, lib):
+        return (('%s %s' % (kind.upper(), label)), lib, None) if ty == 0 else (('%s %s' % (kind.upper(), label)), None, lib)
+    tests += [
+        row('live as game made it', (ml['raw'], fn)),
+        row('live no hash', L(rewrite(raw_bc, fn[:11] + '_nh', False, False))),
+        row('live +uselist', L(rewrite(raw_bc, fn[:11] + '_ul', True, True))),
+        row('live via llvm-as', L(asm(t, fn[:11] + '_as'))),
+    ]
 
 blobs = {}
 def ident_of(data):

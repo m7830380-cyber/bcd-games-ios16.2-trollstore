@@ -1,5 +1,5 @@
 diff --git a/src/airconv/metallib_writer.cpp b/src/airconv/metallib_writer.cpp
-index c0a5793..cfe4cbf 100644
+index c0a5793..85a5ac3 100644
 --- a/src/airconv/metallib_writer.cpp
 +++ b/src/airconv/metallib_writer.cpp
 @@ -94,8 +94,18 @@ static void normalise_legacy(Module &module) {
@@ -32,3 +32,14 @@ index c0a5793..cfe4cbf 100644
        }
      }
    }
+@@ -166,7 +177,9 @@ void MetallibWriter::Write(const llvm::Module &module, raw_ostream &OS) {
+   const uint16_t air_minor = legacy ? 5 : 6, lang_minor = legacy ? 0 : 1;
+ 
+   raw_svector_ostream bitcode_stream(bitcode);
+-  WriteBitcodeToFile(module, bitcode_stream, false, nullptr, true);
++  // Apple's iOS 16 toolchain writes no MODULE_CODE_HASH record; leave it out
++  // there (the library's HASH tag is a separate sha256 of the bitcode).
++  WriteBitcodeToFile(module, bitcode_stream, false, nullptr, !legacy);
+ 
+   auto hash =
+     compute_sha256_hash((const uint8_t *)bitcode.data(), bitcode.size());
