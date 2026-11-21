@@ -1471,11 +1471,7 @@ static void madeira_mfc32(NSFileManager *fm, NSString *syswow64, NSString *suppo
  * 64-bit processes in the same prefix see no difference. An assembly whose
  * first file is missing from the i386 farm is skipped: a manifest without its
  * DLL would redirect that DLL's loads into an empty directory. */
-static void madeira_seed_winsxs_x86(NSFileManager *fm, NSString *prefix, NSString *bundle)
-{
-    struct sxs_file { const char *in_assembly; const char *in_farm; };
-    struct sxs_assembly { const char *name, *lname, *key, *version; struct sxs_file files[4]; };
-    static const char *comctl32_body =
+static const char *const madeira_comctl32_sxs_body =
         "    <windowClass>Button</windowClass>\n"
         "    <windowClass>ButtonListBox</windowClass>\n"
         "    <windowClass>ComboBoxEx32</windowClass>\n"
@@ -1504,6 +1500,52 @@ static void madeira_seed_winsxs_x86(NSFileManager *fm, NSString *prefix, NSStrin
         "    <windowClass>msctls_trackbar32</windowClass>\n"
         "    <windowClass>msctls_updown32</windowClass>\n"
         "    <windowClass>tooltips_class32</windowClass>\n";
+
+/* madeira-bcd (Roblox Studio Installer): the 64-bit side of Common-Controls 6.0. A 64-bit program whose manifest asks
+ * for Microsoft.Windows.Common-Controls 6.0 found no assembly ("Could not find dependent assembly ... (6.0.0.0)"), so it
+ * got the shipped comctl32.dll, which is version 5 and has no TaskDialogIndirect: the installer's first task dialog
+ * ended the process with "unimplemented function COMCTL32.dll.TaskDialogIndirect" (status 80000100). The arm64ec
+ * comctl32_v6.dll is built by tools/build-wine-extra-dlls.sh; this writes the amd64_ assembly that dlls/setupapi/
+ * fakedll.c would write (an arm64ec process looks for "a??64_" names, dlls/ntdll/actctx.c). Re-seeded every session,
+ * because the link names the bundle path. env.MADEIRA_COMCTL6_X64 = 0 removes it (64-bit programs get version 5 again). */
+static void madeira_seed_winsxs_comctl6_x64(NSFileManager *fm, NSString *prefix, NSString *bundle)
+{
+    NSString *winsxs = [prefix stringByAppendingPathComponent:@"drive_c/windows/winsxs"];
+    NSString *manifests = [winsxs stringByAppendingPathComponent:@"manifests"];
+    NSString *dirName = @"amd64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef";
+    NSString *asmDir = [winsxs stringByAppendingPathComponent:dirName];
+    NSString *manifest = [manifests stringByAppendingPathComponent:[dirName stringByAppendingString:@".manifest"]];
+    NSString *src = [[bundle stringByAppendingPathComponent:@"arm64ec-windows"] stringByAppendingPathComponent:@"comctl32_v6.dll"];
+    NSString *link = [asmDir stringByAppendingPathComponent:@"comctl32.dll"];
+    const char *want = getenv("MADEIRA_COMCTL6_X64");
+    [fm removeItemAtPath:link error:nil];
+    if ((want && strcmp(want, "0") == 0) || ![fm fileExistsAtPath:src])
+    {
+        [fm removeItemAtPath:manifest error:nil];
+        dprintf(STDERR_FILENO, "[WineProc] winsxs: amd64 Common-Controls 6.0 %s\n",
+                (want && strcmp(want, "0") == 0) ? "off (env.MADEIRA_COMCTL6_X64 = 0)" : "not seeded, arm64ec-windows has no comctl32_v6.dll");
+        return;
+    }
+    [fm createDirectoryAtPath:manifests withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm createDirectoryAtPath:asmDir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *text = [NSString stringWithFormat:
+        @"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
+        @"<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">\n"
+        @"  <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"6.0.2600.2982\" "
+        @"processorArchitecture=\"amd64\" publicKeyToken=\"6595b64144ccf1df\"/>\n"
+        @"  <file name=\"comctl32.dll\">\n%s  </file>\n"
+        @"</assembly>\n", madeira_comctl32_sxs_body];
+    const BOOL ok = [fm createSymbolicLinkAtPath:link withDestinationPath:src error:nil] &&
+                    [[text dataUsingEncoding:NSUTF8StringEncoding] writeToFile:manifest atomically:YES];
+    if (!ok) [fm removeItemAtPath:manifest error:nil];
+    dprintf(STDERR_FILENO, "[WineProc] winsxs: amd64 Common-Controls 6.0 %s\n", ok ? "seeded" : "FAILED");
+}
+
+static void madeira_seed_winsxs_x86(NSFileManager *fm, NSString *prefix, NSString *bundle)
+{
+    struct sxs_file { const char *in_assembly; const char *in_farm; };
+    struct sxs_assembly { const char *name, *lname, *key, *version; struct sxs_file files[4]; };
+    const char *const comctl32_body = madeira_comctl32_sxs_body;
     /* One entry per WINE_MANIFEST resource in the Wine tree (the file the
      * values come from is named on each entry). */
     static const struct sxs_assembly asms[] = {
@@ -2721,6 +2763,7 @@ static void *wine_process_thread(void *arg) {
                 madeira_link_syswow64_wbem(fm, prefix, bundlePath);
                 madeira_seed_winsxs_x86(fm, prefix, bundlePath);
             }
+            madeira_seed_winsxs_comctl6_x64(fm, prefix, bundlePath);
             /* Steam CEG (Madeira #519, ada55ec): the empty folders stock Wine makes and the template lacks. */
             madeira_ensure_wine_inf_dirs(fm, prefix, has_i386_set);
             madeira_link_wine_mono(fm, prefix, bundlePath);
