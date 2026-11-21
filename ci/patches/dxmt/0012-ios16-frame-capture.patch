@@ -1,5 +1,5 @@
 diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
-index 1b32bdc..823d5cb 100644
+index 1b32bdc..18f5006 100644
 --- a/src/winemetal/unix/winemetal_unix.c
 +++ b/src/winemetal/unix/winemetal_unix.c
 @@ -45,6 +45,8 @@ extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name,
@@ -130,14 +130,14 @@ index 1b32bdc..823d5cb 100644
  static NTSTATUS
  _MTLCommandBuffer_presentDrawable(void *obj) {
    struct unixcall_generic_obj_obj_noret *params = obj;
-@@ -4326,6 +4433,7 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
-     wmtr_call(RM_OP_PRESENT_DRAWABLE, &a, sizeof a, 0, 0, 0);
-     return STATUS_SUCCESS;
+@@ -4376,6 +4483,7 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
+     madeira_log_present_cadence("presentDrawable", 0.0);
+     [(id<MTLCommandBuffer>)params->handle presentDrawable:(id<MTLDrawable>)params->arg];
    }
-+  cap_maybe((id<MTLCommandBuffer>)params->handle, (id<CAMetalDrawable>)params->arg);
-   int mode = g_madeira_vsync_mode;
-   {   /* madeira-bcd fps-gov (tools/patch-winemetal-fps-cap.py): the governor's frame cap, opt-in */
-     extern unsigned long long ios_fps_cap_dxmt_pace(void);
++  cap_maybe((id<MTLCommandBuffer>)params->handle, (id<CAMetalDrawable>)params->arg);   /* [frame-cap] */
+   return STATUS_SUCCESS;
+ }
+ 
 @@ -4777,7 +4885,7 @@ _MetalLayer_setProps(void *obj) {
    execute_on_main(^{
      layer.device = (id<MTLDevice>)props->device;
