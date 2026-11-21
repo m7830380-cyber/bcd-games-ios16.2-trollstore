@@ -1,0 +1,153 @@
+diff --git a/src/airconv/airconv_public.h b/src/airconv/airconv_public.h
+index c6f0bb8..aa94bb1 100644
+--- a/src/airconv/airconv_public.h
++++ b/src/airconv/airconv_public.h
+@@ -101,6 +101,17 @@ struct MTL_GEOMETRY_SHADER_PASS_THROUGH {
+   uint8_t ViewportArrayIndexComponent;
+ };
+ 
++/* Madeira iOS 16: bytes of object payload the GS emulation needs: a 16-byte
++ * header plus one VS output record per object thread (at most 32). It used to
++ * always reserve the 16256-byte maximum; on iOS 16.2 (A16) the mesh stage then
++ * read corrupted vertices (UE4 colour LUT and translucency volume drawn as
++ * wrong wedges, Brick Rigs colours wrong). Object shader, mesh shader and the
++ * pipeline descriptor must all use this same value. */
++static inline uint32_t MTLGSPayloadSize(uint32_t vs_output_registers) {
++  uint64_t size = 16 + 32ull * 16ull * vs_output_registers;
++  return size > 16256 ? 16256u : (uint32_t)size;
++}
++
+ struct MTL_GEOMETRY_SHADER_REFLECTION {
+   union {
+     struct MTL_GEOMETRY_SHADER_PASS_THROUGH Data;
+diff --git a/src/airconv/dxbc_converter.cpp b/src/airconv/dxbc_converter.cpp
+index db4ebbb..35222b8 100644
+--- a/src/airconv/dxbc_converter.cpp
++++ b/src/airconv/dxbc_converter.cpp
+@@ -1,3 +1,5 @@
++#include <atomic>
++#include <cstdio>
+ #include "dxbc_converter.hpp"
+ #include "DXBCParser/BlobContainer.h"
+ #include "DXBCParser/ShaderBinary.h"
+@@ -1358,15 +1360,50 @@ static int parse_shader(
+       pRefl->PostTessellator = {.MaxPotentialTessFactor = max_potential_tess_factor};
+     }
+     if (sm50_shader->shader_type == microsoft::D3D10_SB_GEOMETRY_SHADER) {
+-      if (binding_cbuffer_mask || binding_sampler_mask || binding_uav_mask ||
+-          binding_srv_hi_mask || binding_srv_lo_mask ||
+-          !CheckGSBBIsPassThrough(sm50_shader->entry())) {
++      bool gs_has_bindings = binding_cbuffer_mask || binding_sampler_mask || binding_uav_mask ||
++                             binding_srv_hi_mask || binding_srv_lo_mask;
++      bool gs_bb_passthrough = CheckGSBBIsPassThrough(sm50_shader->entry());
++      bool gs_sig_passthrough = false;
++      if (gs_has_bindings || !gs_bb_passthrough) {
+         pRefl->GeometryShader.GSPassThrough = ~0u;
+       } else {
+-        CheckGSSignatureIsPassThrough(
++        gs_sig_passthrough = CheckGSSignatureIsPassThrough(
+           inputParser, outputParser, pRefl->GeometryShader.Data
+         );
+       }
++      /* Madeira iOS 16: say why a GS takes the mesh-shader path. UE4's
++       * WriteToSlice GS (colour LUT, translucency volume) is expected to be a
++       * pass-through but was emulated; this shows which check refused it. */
++      {
++        static std::atomic<uint32_t> gs_diag_count{0};
++        if (gs_diag_count.fetch_add(1, std::memory_order_relaxed) < 24) {
++          fprintf(stderr,
++                  "[gs-diag] madeira-bcd GS prim=%u bindings(cb=%llx s=%llx u=%llx t=%llx/%llx) bb-pass=%d sig-pass=%d "
++                  "result=%08x rtai=%u.%u vpai=%u.%u maxout=%u\n",
++                  (unsigned)sm50_shader->gs_input_primitive, (unsigned long long)binding_cbuffer_mask,
++                  (unsigned long long)binding_sampler_mask, (unsigned long long)binding_uav_mask,
++                  (unsigned long long)binding_srv_hi_mask, (unsigned long long)binding_srv_lo_mask,
++                  (int)gs_bb_passthrough, (int)gs_sig_passthrough, pRefl->GeometryShader.GSPassThrough,
++                  pRefl->GeometryShader.Data.RenderTargetArrayIndexReg,
++                  pRefl->GeometryShader.Data.RenderTargetArrayIndexComponent,
++                  pRefl->GeometryShader.Data.ViewportArrayIndexReg,
++                  pRefl->GeometryShader.Data.ViewportArrayIndexComponent, sm50_shader->max_output_register);
++          const D3D11_SIGNATURE_PARAMETER *gs_params = nullptr;
++          inputParser.GetParameters(&gs_params);
++          for (unsigned i = 0; gs_params && i < inputParser.GetNumParameters(); i++)
++            fprintf(stderr, "[gs-diag]   in  %s%u reg=%u mask=%x sv=%u\n", gs_params[i].SemanticName,
++                    gs_params[i].SemanticIndex, gs_params[i].Register, (unsigned)gs_params[i].Mask,
++                    (unsigned)gs_params[i].SystemValue);
++          if (outputParser.NumStreams() > 0 && outputParser.Signature(0)) {
++            gs_params = nullptr;
++            outputParser.Signature(0)->GetParameters(&gs_params);
++            for (unsigned i = 0; gs_params && i < outputParser.Signature(0)->GetNumParameters(); i++)
++              fprintf(stderr, "[gs-diag]   out %s%u reg=%u mask=%x sv=%u\n", gs_params[i].SemanticName,
++                      gs_params[i].SemanticIndex, gs_params[i].Register, (unsigned)gs_params[i].Mask,
++                      (unsigned)gs_params[i].SystemValue);
++          }
++        }
++      }
+       pRefl->GeometryShader.Primitive = sm50_shader->gs_input_primitive;
+     }
+     if (sm50_shader->shader_type == microsoft::D3D10_SB_PIXEL_SHADER) {
+diff --git a/src/airconv/dxbc_converter_gs.cpp b/src/airconv/dxbc_converter_gs.cpp
+index f29d63b..54be755 100644
+--- a/src/airconv/dxbc_converter_gs.cpp
++++ b/src/airconv/dxbc_converter_gs.cpp
+@@ -149,7 +149,7 @@ convert_dxbc_geometry_shader(
+     return llvm::make_error<UnsupportedFeature>("unsupported geometry shader output topology");
+   }
+ 
+-  uint32_t payload_idx = func_signature.DefineInput(air::InputPayload{.size = 16256});
++  uint32_t payload_idx = func_signature.DefineInput(air::InputPayload{.size = MTLGSPayloadSize(pVertexStage->max_output_register)});
+   // it's intended to declare a bit more max primitive count
+   auto mesh_idx = func_signature.DefineInput(air::InputMesh{(uint32_t)max_vertex_out, (uint32_t)max_vertex_out, topology});
+   uint32_t tg_in_grid_idx = func_signature.DefineInput(air::InputThreadgroupPositionInGrid{});
+@@ -544,7 +544,7 @@ convert_dxbc_vertex_for_geometry_shader(
+ 
+   setup_binding_table(shader_info, resource_map, func_signature, module);
+ 
+-  uint32_t payload_idx = func_signature.DefineInput(air::InputPayload{.size = 16256});
++  uint32_t payload_idx = func_signature.DefineInput(air::InputPayload{.size = MTLGSPayloadSize(max_output_register)});
+   // (warp_size, 1, 1)
+   uint32_t thread_id_idx = func_signature.DefineInput(air::InputThreadPositionInThreadgroup{});
+   // (warp_count, instance_count, 1)
+diff --git a/src/d3d11/d3d11_pipeline_gs.cpp b/src/d3d11/d3d11_pipeline_gs.cpp
+index d121e74..15f3df7 100644
+--- a/src/d3d11/d3d11_pipeline_gs.cpp
++++ b/src/d3d11/d3d11_pipeline_gs.cpp
+@@ -18,7 +18,8 @@ public:
+         depth_stencil_format(pDesc->DepthStencilFormat), device_(pDevice),
+         pBlendState(pDesc->BlendState),
+         RasterizationEnabled(pDesc->RasterizationEnabled),
+-        SampleCount(pDesc->SampleCount) {
++        SampleCount(pDesc->SampleCount),
++        vs_output_registers(pDesc->VertexShader->reflection().NumOutputElement) {
+     uint32_t unorm_output_reg_mask = 0;
+     for (unsigned i = 0; i < num_rtvs; i++) {
+       rtv_formats[i] = pDesc->ColorAttachmentFormats[i];
+@@ -84,7 +85,7 @@ public:
+ 
+     info.object_function = vs.Function;
+     info.mesh_function = gs.Function;
+-    info.payload_memory_length = 16256;
++    info.payload_memory_length = MTLGSPayloadSize(vs_output_registers); /* Madeira iOS 16, matches the shaders */
+ 
+     info.immutable_object_buffers = (1 << 16)  | (1 << 21) | (1 << 29) | (1 << 30);
+     info.immutable_mesh_buffers = (1 << 29) | (1 << 30);
+@@ -174,6 +175,7 @@ private:
+   WMT::Reference<WMT::RenderPipelineState> state_mesh_;
+   bool RasterizationEnabled;
+   UINT SampleCount;
++  uint32_t vs_output_registers;
+ 
+   CompiledShader *VertexShader;
+   CompiledShader *PixelShader;
+diff --git a/src/dxmt/dxmt_shader_cache.hpp b/src/dxmt/dxmt_shader_cache.hpp
+index 738e910..a5745de 100644
+--- a/src/dxmt/dxmt_shader_cache.hpp
++++ b/src/dxmt/dxmt_shader_cache.hpp
+@@ -5,7 +5,7 @@
+ 
+ namespace dxmt {
+ 
+-constexpr int kDXMTShaderCacheVersion = 20; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17; Madeira iOS 16: object payload barrier */
++constexpr int kDXMTShaderCacheVersion = 21; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17; Madeira iOS 16: object payload barrier; Madeira iOS 16: GS payload sized to fit */
+ 
+ // Base directory every DXMT cache lives under, so the Metal shader cache and
+ // this one cannot disagree about where that is.
