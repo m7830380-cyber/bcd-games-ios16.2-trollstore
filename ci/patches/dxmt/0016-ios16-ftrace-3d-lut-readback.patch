@@ -1,0 +1,178 @@
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index a381ee0..4c12d19 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -3280,22 +3280,72 @@ static float ft_half(uint16_t h) {
+   return s ? -v : v;
+ }
+ 
++/* RG11B10Float: 6-bit mantissa + 5-bit exponent (R, G), 5 + 5 (B), no sign. */
++static float ft_uf(uint32_t v, int mbits) {
++  uint32_t m = v & ((1u << mbits) - 1), e = v >> mbits;
++  if (e == 0) return ldexpf((float)m, -14 - mbits);
++  if (e == 31) return 65504.0f;
++  return ldexpf(1.0f + (float)m / (float)(1u << mbits), (int)e - 15);
++}
++
++static void ft_decode(const uint8_t *p, int kind, int ch, MTLPixelFormat fmt, float c[4]) {
++  c[0] = c[1] = c[2] = c[3] = 0;
++  for (int k = 0; k < ch; k++) {
++    if (kind == 0) c[k] = p[k] / 255.f;
++    else if (kind == 1) c[k] = ft_half(((const uint16_t *)p)[k]);
++    else if (kind == 2) c[k] = ((const float *)p)[k];
++  }
++  if (kind == 3) {
++    uint32_t v = *(const uint32_t *)p;
++    c[0] = (v & 1023) / 1023.f; c[1] = ((v >> 10) & 1023) / 1023.f; c[2] = ((v >> 20) & 1023) / 1023.f; c[3] = (v >> 30) / 3.f;
++  } else if (kind == 4) {
++    uint32_t v = *(const uint32_t *)p;
++    c[0] = ft_uf(v & 2047, 6); c[1] = ft_uf((v >> 11) & 2047, 6); c[2] = ft_uf(v >> 22, 5); c[3] = 1;
++  }
++  if (fmt == MTLPixelFormatBGRA8Unorm || fmt == MTLPixelFormatBGRA8Unorm_sRGB || fmt == MTLPixelFormatBGR10A2Unorm) {
++    float x = c[0]; c[0] = c[2]; c[2] = x;
++  }
++  for (int k = 0; k < 4; k++)
++    if (c[k] != c[k]) c[k] = 0;
++}
++
++/* Writes rgb (clamped 0..1, gamma 1/2.2 for HDR formats) as a binary PPM in Documents. */
++static void ft_save_ppm(const char *name, NSUInteger w, NSUInteger h, const float *rgb, int hdr) {
++  NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
++  if (!docs) return;
++  NSString *path = [docs stringByAppendingPathComponent:[NSString stringWithUTF8String:name]];
++  FILE *f = fopen(path.fileSystemRepresentation, "wb");
++  if (!f) return;
++  fprintf(f, "P6\n%lu %lu\n255\n", (unsigned long)w, (unsigned long)h);
++  for (NSUInteger i = 0; i < w * h * 3; i++) {
++    float v = rgb[i];
++    if (hdr) v = v / (1.0f + v);          /* Reinhard, so HDR scene colour stays readable */
++    v = v < 0 ? 0 : v > 1 ? 1 : v;
++    if (hdr) v = powf(v, 1.0f / 2.2f);
++    fputc((int)(v * 255.0f + 0.5f), f);
++  }
++  fclose(f);
++  fprintf(stderr, "[ftrace] saved %s\n", path.fileSystemRepresentation);
++}
++
+ static void ft_readback(id<MTLCommandBuffer> cb, id<MTLTexture> t, id<MTLFence> fence, unsigned frame, unsigned pass) {
+   if (!t) return;
++  int is3d = t.textureType == MTLTextureType3D;
+   if (t.sampleCount > 1 || t.storageMode == MTLStorageModeMemoryless || t.isFramebufferOnly ||
+-      (t.textureType != MTLTextureType2D && t.textureType != MTLTextureType2DArray)) {
++      (t.textureType != MTLTextureType2D && t.textureType != MTLTextureType2DArray && !is3d)) {
+     fprintf(stderr, "[ftrace] f%u pass %u: color0 not copyable (samples=%lu storage=%lu type=%lu)\n", frame, pass,
+             (unsigned long)t.sampleCount, (unsigned long)t.storageMode, (unsigned long)t.textureType);
+     return;
+   }
+   MTLPixelFormat fmt = t.pixelFormat;
+-  int bpp = 0, ch = 4, kind = 0; /* kind 0 unorm8, 1 half, 2 float, 3 rgb10a2 */
++  int bpp = 0, ch = 4, kind = 0; /* kind 0 unorm8, 1 half, 2 float, 3 rgb10a2, 4 rg11b10f */
+   switch (fmt) {
+   case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB:
+   case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB: bpp = 4; break;
+   case MTLPixelFormatR8Unorm: bpp = 1; ch = 1; break;
+   case MTLPixelFormatRG8Unorm: bpp = 2; ch = 2; break;
+   case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatBGR10A2Unorm: bpp = 4; kind = 3; break;
++  case MTLPixelFormatRG11B10Float: bpp = 4; ch = 3; kind = 4; break;
+   case MTLPixelFormatRGBA16Float: bpp = 8; kind = 1; break;
+   case MTLPixelFormatRG16Float: bpp = 4; ch = 2; kind = 1; break;
+   case MTLPixelFormatR16Float: bpp = 2; ch = 1; kind = 1; break;
+@@ -3305,51 +3355,65 @@ static void ft_readback(id<MTLCommandBuffer> cb, id<MTLTexture> t, id<MTLFence>
+     fprintf(stderr, "[ftrace] f%u pass %u: color0 format %lu not decoded\n", frame, pass, (unsigned long)fmt);
+     return;
+   }
+-  NSUInteger w = t.width, h = t.height, bpr = w * bpp;
+-  id<MTLBuffer> buf = [cb.device newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
++  NSUInteger w = t.width, h = t.height, d = is3d ? t.depth : 1, bpr = w * bpp, bpi = bpr * h;
++  id<MTLBuffer> buf = [cb.device newBufferWithLength:bpi * d options:MTLResourceStorageModeShared];
+   if (!buf) return;
+   id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+   if (fence) [blit waitForFence:fence];   /* DXMT's textures are untracked: wait for the pass */
+   [blit copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+-             sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0
+-    destinationBytesPerRow:bpr destinationBytesPerImage:bpr * h];
++             sourceSize:MTLSizeMake(w, h, d) toBuffer:buf destinationOffset:0
++    destinationBytesPerRow:bpr destinationBytesPerImage:bpi];
+   [blit endEncoding];
++  int hdr = kind == 1 || kind == 2 || kind == 4;
++  /* 3D targets (UE's colour-grading LUT, translucency volumes): every slice, side by side.
++   * Full-size HDR scene colour: every second pixel. */
++  int save = is3d || (kind == 4 && w >= 640);
+   [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+    @autoreleasepool {
+     const uint8_t *px = buf.contents;
+     double sum[4] = {0, 0, 0, 0}, mx[4] = {0, 0, 0, 0};
+-    unsigned long lit = 0, nonzero = 0, nan = 0;
+-    for (NSUInteger i = 0; i < w * h; i++) {
+-      float c[4] = {0, 0, 0, 0};
+-      const uint8_t *p = px + i * bpp;
+-      for (int k = 0; k < ch; k++) {
+-        if (kind == 0) c[k] = p[k] / 255.f;
+-        else if (kind == 1) c[k] = ft_half(((const uint16_t *)p)[k]);
+-        else if (kind == 2) c[k] = ((const float *)p)[k];
+-      }
+-      if (kind == 3) {
+-        uint32_t v = *(const uint32_t *)p;
+-        c[0] = (v & 1023) / 1023.f; c[1] = ((v >> 10) & 1023) / 1023.f; c[2] = ((v >> 20) & 1023) / 1023.f; c[3] = (v >> 30) / 3.f;
+-      }
+-      if (fmt == MTLPixelFormatBGRA8Unorm || fmt == MTLPixelFormatBGRA8Unorm_sRGB || fmt == MTLPixelFormatBGR10A2Unorm) {
+-        float x = c[0]; c[0] = c[2]; c[2] = x;
++    unsigned long lit = 0, nonzero = 0;
++    NSUInteger step = (save && !is3d) ? 2 : 1, ow = is3d ? w * d : w / step, oh = h / step;
++    float *img = save ? calloc(ow * oh * 3, sizeof(float)) : NULL;
++    for (NSUInteger z = 0; z < d; z++) {
++      double ss[4] = {0, 0, 0, 0};
++      for (NSUInteger y = 0; y < h; y++) {
++        for (NSUInteger x = 0; x < w; x++) {
++          float c[4];
++          ft_decode(px + z * bpi + y * bpr + x * bpp, kind, ch, fmt, c);
++          int any = 0;
++          for (int k = 0; k < 4; k++) {
++            sum[k] += c[k]; ss[k] += c[k];
++            if (c[k] > mx[k]) mx[k] = c[k];
++            any |= c[k] != 0;
++          }
++          nonzero += any;
++          if (c[0] > 0.02f || c[1] > 0.02f || c[2] > 0.02f) lit++;
++          if (img) {
++            NSUInteger ox = is3d ? z * w + x : x / step, oy = y / step;
++            if ((is3d || (x % step == 0 && y % step == 0)) && ox < ow && oy < oh)
++              for (int k = 0; k < 3; k++) img[(oy * ow + ox) * 3 + k] = c[k];
++          }
++        }
+       }
+-      int any = 0;
+-      for (int k = 0; k < 4; k++) {
+-        if (c[k] != c[k]) { nan++; c[k] = 0; }
+-        sum[k] += c[k];
+-        if (c[k] > mx[k]) mx[k] = c[k];
+-        any |= c[k] != 0;
++      if (is3d) {
++        double m = (double)(w * h);
++        fprintf(stderr, "[ftrace] f%u pass %u SLICE %lu/%lu avg r=%.3f g=%.3f b=%.3f a=%.3f\n", frame, pass,
++                (unsigned long)z, (unsigned long)d, ss[0] / m, ss[1] / m, ss[2] / m, ss[3] / m);
+       }
+-      nonzero += any;
+-      if (c[0] > 0.02f || c[1] > 0.02f || c[2] > 0.02f) lit++;
+-    }
+-    double n = (double)(w * h);
+-    fprintf(stderr, "[ftrace] f%u pass %u OUTPUT %lux%lu fmt=%lu: avg r=%.3f g=%.3f b=%.3f a=%.3f max r=%.3f g=%.3f b=%.3f a=%.3f "
+-                    "lit=%.1f%% nonzero=%.1f%% nan=%lu cmdbuf status=%ld error=%s\n",
+-            frame, pass, (unsigned long)w, (unsigned long)h, (unsigned long)fmt, sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n,
+-            mx[0], mx[1], mx[2], mx[3], 100.0 * lit / n, 100.0 * nonzero / n, nan, (long)done.status,
++    }
++    double n = (double)(w * h * d);
++    fprintf(stderr, "[ftrace] f%u pass %u OUTPUT %lux%lux%lu fmt=%lu: avg r=%.3f g=%.3f b=%.3f a=%.3f max r=%.3f g=%.3f b=%.3f a=%.3f "
++                    "lit=%.1f%% nonzero=%.1f%% cmdbuf status=%ld error=%s\n",
++            frame, pass, (unsigned long)w, (unsigned long)h, (unsigned long)d, (unsigned long)fmt, sum[0] / n, sum[1] / n,
++            sum[2] / n, sum[3] / n, mx[0], mx[1], mx[2], mx[3], 100.0 * lit / n, 100.0 * nonzero / n, (long)done.status,
+             done.error ? done.error.localizedDescription.UTF8String : "none");
++    if (img) {
++      char name[96];
++      snprintf(name, sizeof name, "bcd-ftrace-f%u-pass%02u-fmt%lu%s.ppm", frame, pass, (unsigned long)fmt, is3d ? "-3d" : "");
++      ft_save_ppm(name, ow, oh, img, hdr && !is3d);
++      free(img);
++    }
+     [buf release];
+    }
+   }];
