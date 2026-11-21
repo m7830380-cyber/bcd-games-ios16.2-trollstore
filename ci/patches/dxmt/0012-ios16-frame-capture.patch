@@ -1,0 +1,149 @@
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 1b32bdc..823d5cb 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -45,6 +45,8 @@ extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name,
+ #define WINEMETAL_API
+ #include "../winemetal_thunks.h"
+ #include "../airconv_thunks.h"
++#include <math.h>
++static id<MTLTexture> g_cap_fs_tex0;   /* [frame-cap]: fragment texture 0 of the last directly bound encoder (the present blit's backbuffer) */
+ 
+ /* iOS-Madeira 2026-05-22 draw-call telemetry. Defined further down with
+  * the present counter; forward-declared here so the draw command cases
+@@ -3373,6 +3375,7 @@ _MTLRenderCommandEncoder_encodeCommands(void *obj) {
+     case WMTRenderCommandSetFragmentTexture: {
+       struct wmtcmd_render_settexture *body = (struct wmtcmd_render_settexture *)next;
+       [encoder setFragmentTexture:(id<MTLTexture>)body->texture atIndex:body->index];
++      if (body->index == 0) g_cap_fs_tex0 = (id<MTLTexture>)body->texture;   /* [frame-cap] */
+       break;
+     }
+     /* MADEIRA (WOW64_DESIGN.md section 7.11): the argument-TABLE binds the
+@@ -4316,6 +4319,110 @@ static int madeira_fg_present(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawa
+   return r;
+ }
+ 
++/* madeira-bcd iOS 16 FRAME CAPTURE: black-screen diagnosis. At presents
++ * #120, #400 and #900 the backbuffer the present blit reads (fragment
++ * texture 0 of the last directly bound encoder) and the drawable itself are
++ * copied to shared memory. The completion handler logs per-channel averages
++ * and the share of non-black pixels as [frame-cap] lines and writes each as a
++ * binary PPM to Documents/bcd-capture-<what>-<frame>.ppm. That splits "the
++ * game renders black" from "the image never reaches the screen". */
++static unsigned g_cap_presents;
++
++static float cap_half(uint16_t h) {
++  uint32_t s = (h >> 15) & 1, e = (h >> 10) & 31, m = h & 1023;
++  float v = e == 0 ? m / 16777216.0f : e == 31 ? 65504.0f : ldexpf(1.0f + m / 1024.0f, (int)e - 15);
++  return s ? -v : v;
++}
++
++static void cap_texture(id<MTLCommandBuffer> cb, id<MTLTexture> t, const char *what, unsigned frame) {
++  if (!t) { fprintf(stderr, "[frame-cap] #%u %s: no texture\n", frame, what); return; }
++  NSUInteger w = t.width, h = t.height, fmt = t.pixelFormat;
++  int bpp = 0;
++  switch (fmt) {
++  case MTLPixelFormatRGBA8Unorm: case MTLPixelFormatRGBA8Unorm_sRGB:
++  case MTLPixelFormatBGRA8Unorm: case MTLPixelFormatBGRA8Unorm_sRGB:
++  case MTLPixelFormatRGB10A2Unorm: case MTLPixelFormatBGR10A2Unorm: bpp = 4; break;
++  case MTLPixelFormatRGBA16Float: bpp = 8; break;
++  default: break;
++  }
++  fprintf(stderr, "[frame-cap] #%u %s: %lux%lu fmt=%lu type=%lu samples=%lu storage=%lu fbonly=%d\n", frame, what,
++          (unsigned long)w, (unsigned long)h, (unsigned long)fmt, (unsigned long)t.textureType,
++          (unsigned long)t.sampleCount, (unsigned long)t.storageMode, t.isFramebufferOnly ? 1 : 0);
++  if (!bpp || t.textureType != MTLTextureType2D || t.sampleCount != 1 || t.isFramebufferOnly || !w || !h) {
++    fprintf(stderr, "[frame-cap] #%u %s: not copyable, skipped\n", frame, what);
++    return;
++  }
++  NSUInteger bpr = w * bpp;
++  id<MTLBuffer> buf = [cb.device newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
++  if (!buf) { fprintf(stderr, "[frame-cap] #%u %s: no buffer\n", frame, what); return; }
++  id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
++  [blit copyFromTexture:t sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
++             sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0
++    destinationBytesPerRow:bpr destinationBytesPerImage:bpr * h];
++  [blit endEncoding];
++  const char *tag = what;   /* a string literal: safe to use from the handler */
++  [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
++    @autoreleasepool {
++      const uint8_t *px = buf.contents;
++      uint8_t *rgb = malloc(w * h * 3);
++      double sum[4] = {0, 0, 0, 0};
++      unsigned long lit = 0;
++      for (NSUInteger i = 0; i < w * h; i++) {
++        float c[4];
++        if (bpp == 8) {
++          const uint16_t *q = (const uint16_t *)(px + i * 8);
++          for (int k = 0; k < 4; k++) c[k] = cap_half(q[k]);
++        } else {
++          uint32_t v = ((const uint32_t *)px)[i];
++          if (fmt == MTLPixelFormatRGB10A2Unorm || fmt == MTLPixelFormatBGR10A2Unorm) {
++            c[0] = (v & 1023) / 1023.f; c[1] = ((v >> 10) & 1023) / 1023.f;
++            c[2] = ((v >> 20) & 1023) / 1023.f; c[3] = (v >> 30) / 3.f;
++            if (fmt == MTLPixelFormatBGR10A2Unorm) { float x = c[0]; c[0] = c[2]; c[2] = x; }
++          } else {
++            for (int k = 0; k < 4; k++) c[k] = ((v >> (8 * k)) & 255) / 255.f;
++            if (fmt == MTLPixelFormatBGRA8Unorm || fmt == MTLPixelFormatBGRA8Unorm_sRGB) { float x = c[0]; c[0] = c[2]; c[2] = x; }
++          }
++        }
++        for (int k = 0; k < 4; k++) sum[k] += c[k];
++        if (c[0] > 0.02f || c[1] > 0.02f || c[2] > 0.02f) lit++;
++        if (rgb) for (int k = 0; k < 3; k++) { float x = c[k] < 0 ? 0 : c[k] > 1 ? 1 : c[k]; rgb[i * 3 + k] = (uint8_t)(x * 255.f + 0.5f); }
++      }
++      double n = (double)(w * h);
++      fprintf(stderr, "[frame-cap] #%u %s: avg r=%.3f g=%.3f b=%.3f a=%.3f lit=%.1f%% (pixels brighter than 2%%) cmdbuf status=%ld error=%s\n",
++              frame, tag, sum[0] / n, sum[1] / n, sum[2] / n, sum[3] / n, 100.0 * lit / n, (long)done.status,
++              done.error ? done.error.localizedDescription.UTF8String : "none");
++      NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
++      if (rgb && docs) {
++        NSString *path = [docs stringByAppendingPathComponent:[NSString stringWithFormat:@"bcd-capture-%s-%u.ppm", tag, frame]];
++        FILE *f = fopen(path.fileSystemRepresentation, "wb");
++        if (f) {
++          fprintf(f, "P6\n%lu %lu\n255\n", (unsigned long)w, (unsigned long)h);
++          fwrite(rgb, 1, w * h * 3, f);
++          fclose(f);
++          fprintf(stderr, "[frame-cap] #%u %s: saved %s\n", frame, tag, path.fileSystemRepresentation);
++        }
++      }
++      free(rgb);
++      [buf release];
++    }
++  }];
++}
++
++static void cap_maybe(id<MTLCommandBuffer> cb, id<CAMetalDrawable> drawable) {
++  unsigned frame = ++g_cap_presents;
++  if (frame != 120 && frame != 400 && frame != 900) return;
++  @autoreleasepool {
++    CAMetalLayer *layer = drawable.layer;
++    fprintf(stderr, "[frame-cap] #%u layer bounds=%.0fx%.0f drawableSize=%.0fx%.0f opaque=%d hidden=%d opacity=%.2f "
++                    "superlayer=%p fbonly=%d pixfmt=%lu\n", frame,
++            layer.bounds.size.width, layer.bounds.size.height, layer.drawableSize.width, layer.drawableSize.height,
++            layer.opaque ? 1 : 0, layer.hidden ? 1 : 0, layer.opacity, (void *)layer.superlayer,
++            layer.framebufferOnly ? 1 : 0, (unsigned long)layer.pixelFormat);
++    cap_texture(cb, g_cap_fs_tex0, "backbuffer", frame);
++    cap_texture(cb, drawable.texture, "drawable", frame);
++  }
++}
++
+ static NTSTATUS
+ _MTLCommandBuffer_presentDrawable(void *obj) {
+   struct unixcall_generic_obj_obj_noret *params = obj;
+@@ -4326,6 +4433,7 @@ _MTLCommandBuffer_presentDrawable(void *obj) {
+     wmtr_call(RM_OP_PRESENT_DRAWABLE, &a, sizeof a, 0, 0, 0);
+     return STATUS_SUCCESS;
+   }
++  cap_maybe((id<MTLCommandBuffer>)params->handle, (id<CAMetalDrawable>)params->arg);
+   int mode = g_madeira_vsync_mode;
+   {   /* madeira-bcd fps-gov (tools/patch-winemetal-fps-cap.py): the governor's frame cap, opt-in */
+     extern unsigned long long ios_fps_cap_dxmt_pace(void);
+@@ -4777,7 +4885,7 @@ _MetalLayer_setProps(void *obj) {
+   execute_on_main(^{
+     layer.device = (id<MTLDevice>)props->device;
+     layer.opaque = props->opaque;
+-    layer.framebufferOnly = madeira_fg_enabled() ? NO : props->framebuffer_only;   /* frame generation reads the drawable */
++    layer.framebufferOnly = NO;   /* [frame-cap] reads the drawable; was: madeira_fg_enabled() ? NO : props->framebuffer_only */   /* frame generation reads the drawable */
+     layer.contentsScale = props->contents_scale;
+ #if !TARGET_OS_IOS
+     layer.displaySyncEnabled = props->display_sync_enabled;
