@@ -1,0 +1,34 @@
+diff --git a/src/airconv/metallib_writer.cpp b/src/airconv/metallib_writer.cpp
+index c0a5793..cfe4cbf 100644
+--- a/src/airconv/metallib_writer.cpp
++++ b/src/airconv/metallib_writer.cpp
+@@ -94,8 +94,18 @@ static void normalise_legacy(Module &module) {
+       }
+     }
+   }
++  // iOS 16's AGX compiler fails ("Compiler encountered an internal error")
++  // on any call to an air.* intrinsic whose declaration carries attributes
++  // Apple's iOS 16 toolchain never emits (willreturn, nofree, nosync, ...).
++  static const Attribute::AttrKind kNewAttrs[] = {
++      Attribute::MustProgress, Attribute::WillReturn, Attribute::NoFree,
++      Attribute::NoSync, Attribute::NoCallback};
+   for (auto &F : module) {
+-    F.removeFnAttr(Attribute::MustProgress);
++    for (auto k : kNewAttrs)
++      F.removeFnAttr(k);
++    for (unsigned a = 0; a < F.arg_size(); a++)
++      F.removeParamAttr(a, Attribute::NoUndef);
++    F.removeRetAttr(Attribute::NoUndef);
+     for (auto &BB : F) {
+       for (auto &I : BB) {
+         for (unsigned i = 0; i < I.getNumOperands(); i++) {
+@@ -105,7 +115,8 @@ static void normalise_legacy(Module &module) {
+           }
+         }
+         if (auto *call = dyn_cast<CallBase>(&I))
+-          call->removeFnAttr(Attribute::MustProgress);
++          for (auto k : kNewAttrs)
++            call->removeFnAttr(k);
+       }
+     }
+   }

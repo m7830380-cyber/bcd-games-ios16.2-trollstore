@@ -259,28 +259,24 @@ ps_direct = ps_direct.replace('%argument_buffer_struct = type { %struct._sampler
 # lod 0 plus Apple's spelling of the texture type name
 ps_ab_min = ps_lod0.replace('!"texture2d<float,sample>"', '!"texture2d<float, sample>"')
 
+# ---- round 3: round 2 failed exactly the tests that call an air.* intrinsic
+# (fma, sample_texture_2d); airconv declares those willreturn nofree nosync,
+# Apple's iOS 16 toolchain never does. Strip only those and retry.
+def noattr(t):
+    out = re.sub(r'^(attributes #\d+ = \{)(.*)\}$',
+                 lambda m: m.group(1) + re.sub(r'\s(willreturn|nofree|nosync|mustprogress|nocallback)(?=\s)', '', ' ' + m.group(2) + ' ').rstrip() + ' }',
+                 t, flags=re.M)
+    assert out != t
+    return out.replace('{  ', '{ ')
+
 # (name, vertex (lib, fn) or None for the MSL v_tc, fragment (lib, fn) or None)
 tests = [
-    ('apple VS+FS raw',         AV(a_vs_bc), AF(a_fs_bc)),
-    ('VS bare',                 V(asm(bare, 'vs_bare')), None),
-    ('VS math (fma,isfinite)',  V(asm(vs_math, 'vs_math')), None),
-    ('VS ab cb-ptr only',       V(asm(vs_ab_ptr, 'vs_ab_ptr')), None),
-    ('VS ab cb load',           V(asm(vs_ab_cb, 'vs_ab_cb')), None),
-    ('VS vb ptr only',          V(asm(vs_vb_ptr, 'vs_vb_ptr')), None),
-    ('VS vb float',             V(asm(vs_vb_f1, 'vs_vb_f1')), None),
-    ('VS vb float3',            V(asm(vs_vb_f3, 'vs_vb_f3')), None),
-    ('VS vb float4',            V(asm(vs_vb_f4, 'vs_vb_f4')), None),
-    ('VS orig no-pull',         V(asm(vs_nopull, 'vs_nopull')), None),
-    ('VS orig or-not-select',   V(asm(vs_nosel, 'vs_nosel')), None),
-    ('PS bare',                 None, P(asm(ps_bare, 'ps_bare'))),
-    ('PS ab ulong',             None, P(asm(ps_ab_meta, 'ps_ab_meta'))),
-    ('PS ab tex ptr',           None, P(asm(ps_ab_tex, 'ps_ab_tex'))),
-    ('PS orig lod 0',           None, P(asm(ps_lod0, 'ps_lod0'))),
-    ('PS orig apple tex typename', None, P(asm(ps_ab_min, 'ps_ab_min'))),
-    ('PS direct tex+smp',       None, P(asm(ps_direct, 'ps_direct'))),
-    ('PS direct tex+smp +meta', None, P(asm(meta(ps_direct), 'ps_direct_meta'))),
-    ('VS orig',                 (vs_ml['raw'], vs_fn), None),
-    ('PS orig',                 None, (ps_ml['raw'], ps_fn)),
+    ('VS bare',                    V(asm(bare, 'vs_bare')), None),
+    ('VS math (as round 2)',       V(asm(vs_math, 'vs_math')), None),
+    ('VS math -willreturn/nofree', V(asm(noattr(vs_math), 'vs_math_na')), None),
+    ('PS direct -willreturn/nofree', None, P(asm(noattr(ps_direct), 'ps_direct_na'))),
+    ('VS orig -willreturn/nofree', V(asm(noattr(vs), 'vs_orig_na')), None),
+    ('PS orig -willreturn/nofree', None, P(asm(noattr(ps), 'ps_orig_na'))),
 ]
 
 blobs = {}
