@@ -75,6 +75,7 @@ patch-wine-msvcrt-initdiag.py @W@
 patch-wine-heap-exec-flush.py @W@/dlls/ntdll/heap.c
 patch-wine-loader-import-diag.py @W@
 patch-wine-loader-import-appdir.py @W@
+patch-wine-loader-mimalloc-flag.py @W@
 patch-wine-ntdll-rtcs-area.py @W@
 patch-wine-ntdll-cxx-diag.py @W@
 patch-wine-shell32-navpane-null.py @W@
