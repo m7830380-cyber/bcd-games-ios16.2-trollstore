@@ -22,7 +22,8 @@ PROCESSOR_ARCHITEW6432 environment variable. With env.MADEIRA_X64_MACHINE = 1 in
 Only these two answers an application can see are changed. The query below them (NtQuerySystemInformation
 SystemSupportedProcessorArchitectures, RtlWow64GetProcessMachines) is untouched: WoW64's own start-up reads it to pick
 the CPU backend and the native machine type, so it must keep saying ARM64. Without the variable, or with any value
-but 1, nothing changes. Built into the i386 farm only (a 64-bit program, and the arm64ec DLLs, keep the old answer).
+but 1, nothing changes. Built into the i386 farm and the rebuilt 64-bit set (tools/build-wine-fresh-dlls.sh); there, for an x64 program, the key also
+makes PROCESSOR_ARCHITECTURE AMD64 (what Windows on ARM tells an emulated x64 program; Roblox Studio's installer).
 
 Usage: patch-wine-x64-machine.py <wine source dir>. Idempotent; fails by name if an anchor moves.
 """
@@ -96,9 +97,20 @@ ENV_NEW = """        RtlWow64GetProcessMachines( GetCurrentProcess(), NULL, &mac
         RtlSetEnvironmentVariable( env, &arch6432_strW, get_machine_name( machine, &nameW ));
 """
 
+# A 64-bit x64 program (the arm64ec ntdll, rebuilt set, env.MADEIRA_WIN64_FRESH = 1) hears PROCESSOR_ARCHITECTURE = ARM64
+# from Wine (current_machine of an arm64ec build); Windows on ARM tells an emulated x64 program AMD64. Roblox Studio's
+# installer (x64) then says "Roblox no longer supports Windows 32-bit devices". With the key, an x64 main image gets AMD64.
+ENV_ARCH_OLD = """    RtlSetEnvironmentVariable( env, &arch_strW, get_machine_name( current_machine, &nameW ));
+"""
+ENV_ARCH_NEW = ENV_ARCH_OLD + """#ifdef __arm64ec__
+    if (machine == IMAGE_FILE_MACHINE_AMD64 && madeira_x64_machine( *env ))   /* """ + MARKER + """: x64 main image */
+        RtlSetEnvironmentVariable( env, &arch_strW, get_machine_name( IMAGE_FILE_MACHINE_AMD64, &nameW ));
+#endif
+"""
+
 FILES = (
     ("dlls/kernelbase/process.c", ((KB_OLD, KB_NEW),)),
-    ("dlls/ntdll/env.c", ((ENV_HEAD_OLD, ENV_HEAD_NEW), (ENV_OLD, ENV_NEW))),
+    ("dlls/ntdll/env.c", ((ENV_HEAD_OLD, ENV_HEAD_NEW), (ENV_ARCH_OLD, ENV_ARCH_NEW), (ENV_OLD, ENV_NEW))),
 )
 
 
