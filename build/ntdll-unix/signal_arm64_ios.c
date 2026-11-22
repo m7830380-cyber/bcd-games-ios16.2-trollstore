@@ -3205,6 +3205,31 @@ int ios_syscall_frame_user( uintptr_t teb, uint64_t *pc, uint64_t *lr, uint64_t 
     return 1;
 }
 
+/* madeira-bcd (Roblox Studio white window, build 687): [pe-resume], log only.
+ * Studio's RBX Worker threads take ~5.7k exec faults/s at ntdll+0x63688 (the
+ * instruction after the `stp q0,q1,[x9,#-16]` of memcpy's 32-byte loop): each time
+ * the thread is sent to the pool copy, and one loop iteration later it is back at
+ * the PE VA. Nothing in the log says what puts it there. This keeps, per Mach
+ * thread, the last exception this handler serviced (exception, code, address,
+ * pc in, pc out) and, when a thread exec-faults at a PE image VA, prints that
+ * record: out_pc == this pc names the branch of this handler that resumed it
+ * there (by its exception/address); out_pc != this pc means something other
+ * than this handler moved the pc. Single writer (this handler thread). */
+static struct { mach_port_t thr; int exc; uint64_t code0, addr, in_pc, out_pc, in_x9, in_lr; unsigned long long t; } ios_pe_resume_last[128];
+static int ios_pe_resume_slot( mach_port_t thr )
+{
+    int i, free_i = -1;
+    for (i = 0; i < 128; i++)
+    {
+        if (ios_pe_resume_last[i].thr == thr) return i;
+        if (!ios_pe_resume_last[i].thr && free_i < 0) free_i = i;
+    }
+    if (free_i < 0) free_i = (int)(thr & 127);
+    ios_pe_resume_last[free_i].thr = thr;
+    ios_pe_resume_last[free_i].exc = 0;
+    return free_i;
+}
+
 static void *ios_mach_exception_thread( void *arg )
 {
     mach_port_t port = (mach_port_t)(uintptr_t)arg;
@@ -3787,6 +3812,49 @@ static void *ios_mach_exception_thread( void *arg )
         if (kr == KERN_SUCCESS)
         {
             uintptr_t fault_addr = (uintptr_t)req->code[1];
+            /* madeira-bcd build 687 [pe-resume]: see ios_pe_resume_last */
+            const uint64_t pe_resume_in_pc = (uint64_t)__darwin_arm_thread_state64_get_pc(state);
+            const uint64_t pe_resume_in_x9 = state.__x[9];
+            const uint64_t pe_resume_in_lr = (uint64_t)__darwin_arm_thread_state64_get_lr(state);
+            {
+                extern uint64_t ios_jit_reverse_translate( uint64_t addr, uint64_t *module_base );
+                extern void *ios_jit_translate_addr_for_owner( void *addr, void *peb );
+                if (req->exception == EXC_BAD_ACCESS && fault_addr == (uintptr_t)pe_resume_in_pc &&
+                    pe_resume_in_pc >= 0x100000000ULL && thread_teb)
+                {
+                    void *owner = ((TEB *)thread_teb)->Peb;
+                    void *jit = ios_jit_translate_addr_for_owner( (void *)(uintptr_t)pe_resume_in_pc, owner );
+                    if (jit && jit != (void *)(uintptr_t)pe_resume_in_pc)
+                    {
+                        static unsigned long pr_n;
+                        int sl = ios_pe_resume_slot( thread );
+                        unsigned long n = ++pr_n;
+                        if (n <= 48 || (n % 8192) == 0)
+                        {
+                            uint32_t pinsn = 0, jinsn = 0;
+                            uint64_t pmod = 0, ppe = ios_jit_reverse_translate( ios_pe_resume_last[sl].in_pc, &pmod );
+                            ios_fault_read_insn( ios_pe_resume_last[sl].in_pc, &pinsn );
+                            ios_fault_read_insn( (uint64_t)(uintptr_t)jit, &jinsn );
+                            dprintf( STDERR_FILENO,
+                                "[pe-resume] b687 #%lu thr=0x%x pc=0x%llx (pool 0x%llx insn=0x%08x) x9=0x%llx lr=0x%llx | PREVIOUS on this thread: "
+                                "exc=%d code=0x%llx addr=0x%llx in_pc=0x%llx (pe 0x%llx insn=0x%08x) out_pc=0x%llx x9=0x%llx lr=0x%llx dt=%lluus -> %s\n",
+                                n, (unsigned)thread, (unsigned long long)pe_resume_in_pc,
+                                (unsigned long long)(uintptr_t)jit, jinsn,
+                                (unsigned long long)pe_resume_in_x9, (unsigned long long)pe_resume_in_lr,
+                                ios_pe_resume_last[sl].exc, (unsigned long long)ios_pe_resume_last[sl].code0,
+                                (unsigned long long)ios_pe_resume_last[sl].addr,
+                                (unsigned long long)ios_pe_resume_last[sl].in_pc, (unsigned long long)ppe, pinsn,
+                                (unsigned long long)ios_pe_resume_last[sl].out_pc,
+                                (unsigned long long)ios_pe_resume_last[sl].in_x9,
+                                (unsigned long long)ios_pe_resume_last[sl].in_lr,
+                                ios_pe_resume_last[sl].t ? (unsigned long long)((mach_absolute_time() - ios_pe_resume_last[sl].t) / 24) : 0ull,
+                                !ios_pe_resume_last[sl].exc ? "no earlier exception recorded"
+                                : ios_pe_resume_last[sl].out_pc == pe_resume_in_pc ? "THIS HANDLER resumed it at the PE VA"
+                                : "pc moved OUTSIDE this handler (not its resume)" );
+                        }
+                    }
+                }
+            }
 #ifdef WINE_IOS
             /* ml939: THE SUB-FLOOR SERVICE BELONGS HERE, NOT IN segv_handler.
              *
@@ -7088,6 +7156,17 @@ skip_reclaim_band: ;
                     handled = 1;
             }
 
+            {   /* madeira-bcd build 687 [pe-resume]: record what this exception became */
+                int sl = ios_pe_resume_slot( thread );
+                ios_pe_resume_last[sl].exc = req->exception;
+                ios_pe_resume_last[sl].code0 = (uint64_t)req->code[0];
+                ios_pe_resume_last[sl].addr = (uint64_t)fault_addr;
+                ios_pe_resume_last[sl].in_pc = pe_resume_in_pc;
+                ios_pe_resume_last[sl].in_x9 = pe_resume_in_x9;
+                ios_pe_resume_last[sl].in_lr = pe_resume_in_lr;
+                ios_pe_resume_last[sl].out_pc = handled ? (uint64_t)__darwin_arm_thread_state64_get_pc(state) : pe_resume_in_pc;
+                ios_pe_resume_last[sl].t = mach_absolute_time();
+            }
             if (handled)
                 thread_set_state( thread, ARM_THREAD_STATE64,
                                   (thread_state_t)&state, count );
