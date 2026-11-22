@@ -633,7 +633,21 @@ static volatile int ios_stale_va_tail = 0;   /* written by exc handler */
 static void ios_stale_va_enqueue( uint64_t va )
 {
     int i, n = ios_stale_va_seen_count;
-    if (va == (uint64_t)(uintptr_t)pKiUserExceptionDispatcher ||
+    /* madeira-bcd build 687 (Roblox Studio white window): KiUserExceptionDispatcher
+     * was excluded because healing it once sent a GTA V child into the PARENT's
+     * ntdll; ios_jit_patch_stale_pointer has since translated every slot for the
+     * process that maps its copy (MADEIRA_HEAL_OWNER), which is the same copy the
+     * owner-aware exec-fault redirect picks. Studio's FEX calls it through a stale
+     * PE VA on every x64 syscall/exception: 575k+ Mach round trips
+     * ([pe-resume] pc=ntdll+0x63688, lr in libarm64ecfex). Heal it now unless
+     * MADEIRA_HEAL_KIUED=0 (or the owner-aware rule is off). */
+    static int heal_kiued = -1;
+    if (heal_kiued < 0)
+    {
+        const char *e = getenv( "MADEIRA_HEAL_KIUED" ), *o = getenv( "MADEIRA_HEAL_OWNER" );
+        heal_kiued = !(e && e[0] == '0' && !e[1]) && !(o && o[0] == '0' && !o[1]);
+    }
+    if ((!heal_kiued && va == (uint64_t)(uintptr_t)pKiUserExceptionDispatcher) ||
         (va & 0xffffULL) == 0x15d0ULL || (va & 0xffffULL) == 0x6d50ULL)
         return;
     for (i = 0; i < n; i++)
