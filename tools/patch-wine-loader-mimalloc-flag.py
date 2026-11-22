@@ -120,7 +120,7 @@ static void ios_mi_patch_imports( LDR_DATA_TABLE_ENTRY *mod )
     ULONG size;
 
     if (!ios_mi_in_heap || !ios_mi_program_module( mod )) return;
-    if (!(imp = RtlImageDirectoryEntryToData( base, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size ))) return;
+    if (!(imp = RtlImageDirectoryEntryToData( (HMODULE)base, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size ))) return;
     for (; imp->Name && imp->FirstThunk; imp++)
     {
         const char *dll = (const char *)(base + imp->Name);

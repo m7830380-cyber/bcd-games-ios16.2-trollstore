@@ -191,7 +191,10 @@ build_arch() {   # arch shipdir
         case "$a" in "#"*|"") continue ;; esac
         [ "$a" = "$arch" ] || continue
         wanted "$arch" "$n" "$t" || continue
-        if [ -f "$B/$t" ]; then finish_and_decide "$arch" "$n" "$B/$t" "$dir" "$t"; else failed="$failed $arch/$n"; fi
+        if [ -f "$B/$t" ]; then finish_and_decide "$arch" "$n" "$B/$t" "$dir" "$t"; else
+            failed="$failed $arch/$n"
+            echo "::error::$arch/$n did not build :: $(grep -E -m6 -A3 "error:" "$B.build.log" | head -c 1800 | python3 -c "import sys; print('%0A'.join(sys.stdin.read().splitlines()))")"
+        fi
     done < "$MODULES"
 }
 
