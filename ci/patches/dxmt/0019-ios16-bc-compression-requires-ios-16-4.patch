@@ -1,0 +1,38 @@
+diff --git a/src/winemetal/unix/winemetal_unix.c b/src/winemetal/unix/winemetal_unix.c
+index 4c12d19..51d7895 100644
+--- a/src/winemetal/unix/winemetal_unix.c
++++ b/src/winemetal/unix/winemetal_unix.c
+@@ -1002,8 +1002,15 @@ static bool query_bc_support(void) {
+     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
+     if (dev) {
+       snprintf(dev_class, sizeof(dev_class), "%s", object_getClassName(dev));   /* ml1249: MTLDebugDevice = validation on */
+-      if ([dev respondsToSelector:@selector(supportsBCTextureCompression)])
+-        supported = [dev supportsBCTextureCompression];
++      /* Madeira iOS 16 (< 16.4): Apple added MTLPixelFormatBC* (130..143) to iOS
++       * Metal.framework in iOS 16.4. On iPadOS 16.3.1 (M2 AGXG14GDevice), the
++       * driver already returns YES for supportsBCTextureCompression while Metal
++       * rejects pixelFormat 135 (BC3_RGBA_sRGB) in MTLDebugValidateMTLPixelFormat.
++       * Gate on iOS 16.4+ so remap_unsupported_bc() and CPU decode handle BC. */
++      if (@available(iOS 16.4, macOS 11.0, *)) {
++        if ([dev respondsToSelector:@selector(supportsBCTextureCompression)])
++          supported = [dev supportsBCTextureCompression];
++      }
+       if ([dev respondsToSelector:@selector(supports32BitFloatFiltering)])
+         float32_filter = [dev supports32BitFloatFiltering] ? 1 : 0;
+       [dev release];
+@@ -4881,7 +4888,14 @@ _MTLDevice_supportsBCTextureCompression(void *obj) {
+     params->ret = (wmtr_call(RM_OP_SUPPORTS_BC, &a, sizeof a, &r, sizeof r, 0) == RM_OK) ? r.value : 0;
+     return STATUS_SUCCESS;
+   }
+-  params->ret = [(id<MTLDevice>)params->handle supportsBCTextureCompression];
++  if (@available(iOS 16.4, macOS 11.0, *)) {
++    id<MTLDevice> dev = (id<MTLDevice>)params->handle;
++    params->ret = [dev respondsToSelector:@selector(supportsBCTextureCompression)]
++                      ? [dev supportsBCTextureCompression]
++                      : 0;
++  } else {
++    params->ret = 0;
++  }
+   return STATUS_SUCCESS;
+ }
+ 
