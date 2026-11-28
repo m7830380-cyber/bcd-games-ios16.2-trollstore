@@ -1,0 +1,36 @@
+diff --git a/src/airconv/dxbc_converter.cpp b/src/airconv/dxbc_converter.cpp
+index 35222b8..65657a2 100644
+--- a/src/airconv/dxbc_converter.cpp
++++ b/src/airconv/dxbc_converter.cpp
+@@ -966,9 +966,15 @@ llvm::Error convertDXBC(
+ bool CheckGSBBIsPassThrough(dxmt::dxbc::BasicBlock *bb) {
+   using namespace dxmt::dxbc;
+   if (bb->instructions.any(patterns{
+-        [](InstNop &) { return false; }, [](InstMov &mov) { return false; },
+-        [](InstEmit &) { return false; }, [](InstCut &) { return false; },
+-        [](auto &) { return true; }
++        /* Madeira iOS 16: InstructionList::any() hands the visitor const
++         * references, so the old non-const overloads never matched and every
++         * instruction fell to the generic case: no GS was ever pass-through.
++         * UE4's WriteToSlice GS (Brick Rigs colour LUT, translucency volume)
++         * then went through the mesh-shader emulation, which draws it wrong on
++         * iOS 16. */
++        [](const InstNop &) { return false; }, [](const InstMov &) { return false; },
++        [](const InstEmit &) { return false; }, [](const InstCut &) { return false; },
++        [](const auto &) { return true; }
+       }))
+     return false;
+ 
+diff --git a/src/dxmt/dxmt_shader_cache.hpp b/src/dxmt/dxmt_shader_cache.hpp
+index a5745de..56bd5fc 100644
+--- a/src/dxmt/dxmt_shader_cache.hpp
++++ b/src/dxmt/dxmt_shader_cache.hpp
+@@ -5,7 +5,7 @@
+ 
+ namespace dxmt {
+ 
+-constexpr int kDXMTShaderCacheVersion = 21; /* madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17; Madeira iOS 16: object payload barrier; Madeira iOS 16: GS payload sized to fit */
++constexpr int kDXMTShaderCacheVersion = 22; /* Madeira iOS 16: GS pass-through check fixed; madeira-bcd: vertex fetch bounds; madeira-bcd: byte-aligned vertex fetch; Madeira iOS 16: no align-1 fetch below iOS 17; Madeira iOS 16: object payload barrier; Madeira iOS 16: GS payload sized to fit */
+ 
+ // Base directory every DXMT cache lives under, so the Metal shader cache and
+ // this one cannot disagree about where that is.
